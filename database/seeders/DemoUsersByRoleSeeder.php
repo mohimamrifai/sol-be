@@ -55,9 +55,9 @@ class DemoUsersByRoleSeeder extends Seeder
         }
 
         $customerDemos = [
-            ['email' => 'company.admin.demo@demo.customer.sol.test', 'name' => 'Demo Company Admin', 'role' => 'company_admin'],
-            ['email' => 'ops.pic.demo@demo.customer.sol.test', 'name' => 'Demo Ops PIC', 'role' => 'ops_pic'],
-            ['email' => 'finance.pic.demo@demo.customer.sol.test', 'name' => 'Demo Finance PIC', 'role' => 'finance_pic'],
+            ['email' => 'admin@customer.test', 'name' => 'Demo Company Admin', 'role' => 'company_admin'],
+            ['email' => 'ops@customer.test', 'name' => 'Demo Ops PIC', 'role' => 'ops_pic'],
+            ['email' => 'finance@customer.test', 'name' => 'Demo Finance PIC', 'role' => 'finance_pic'],
         ];
 
         foreach ($customerDemos as $row) {
