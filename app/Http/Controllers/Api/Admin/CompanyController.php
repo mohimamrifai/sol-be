@@ -143,25 +143,34 @@ class CompanyController extends Controller
     }
 
     /**
-     * Tolak / nonaktifkan perusahaan beserta semua user-nya.
+     * Tolak / reject registrasi perusahaan.
+     * - companies.status = 'rejected'
+     * - semua user di-nonaktifkan (status = 'inactive') dan token dicabut.
      */
-    public function reject(Company $company): JsonResponse
+    public function reject(Request $request, Company $company): JsonResponse
     {
-        $company->update(['status' => 'inactive']);
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
 
-        $users = User::where('company_id', $company->id)
-            ->where('status', '!=', 'inactive')
-            ->get();
+        $company->update(['status' => 'rejected']);
+
+        $users = User::where('company_id', $company->id)->get();
 
         foreach ($users as $user) {
-            $user->update(['status' => 'inactive']);
-            // Revoke all tokens so they are logged out immediately
+            if ($user->status !== 'inactive') {
+                $user->update(['status' => 'inactive']);
+            }
+            // Revoke all tokens so they are logged out immediately.
             $user->tokens()->delete();
         }
 
         return response()->json([
-            'message' => 'Perusahaan berhasil dinonaktifkan.',
-            'data' => $company,
+            'message' => 'Perusahaan berhasil ditolak.',
+            'data' => [
+                'company' => $company->fresh(),
+                'reason' => $validated['reason'],
+            ],
         ]);
     }
 }

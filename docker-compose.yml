@@ -10,8 +10,8 @@ services:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: sol_logistics
 
-    ports:
-      - "3306:3306"
+    # Port mapping dihapus agar tidak konflik dengan MySQL host lokal.
+    # Database diakses dari service `backend` lewat network internal Docker.
 
     volumes:
       - mysql_data:/var/lib/mysql

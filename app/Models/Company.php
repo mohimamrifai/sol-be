@@ -15,16 +15,23 @@ class Company extends Model
     protected $fillable = [
         'name',
         'business_entity_type',
+        'business_entity_other',
         'company_code',
         'npwp',
         'nib',
         'address',
         'city',
         'province',
+        'country',
+        'district',
         'postal_code',
+        'business_category',
+        'business_category_other',
+        'monthly_shipment_estimate',
         'contact_person',
         'email',
         'phone',
+        'website',
         'status',
         'billing_cycle',
         'payment_type',
@@ -36,8 +43,20 @@ class Company extends Model
         static::creating(function (Company $company) {
             $company->name = self::normalizeName($company->name);
 
+            // company_code is provided by the user during registration (3 chars A-Z, unique).
+            // Only auto-generate if it is missing (e.g. backend-driven seeds).
             if (! $company->company_code) {
                 $company->company_code = self::generateUniqueCompanyCode($company->name);
+            }
+        });
+
+        // Spec: company_code is locked once the company becomes Active.
+        static::updating(function (Company $company) {
+            if ($company->isDirty('company_code')) {
+                $originalStatus = $company->getOriginal('status');
+                if ($originalStatus === 'active' || $company->status === 'active') {
+                    $company->company_code = $company->getOriginal('company_code');
+                }
             }
         });
     }

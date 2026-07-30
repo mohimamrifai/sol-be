@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\Customer\PaymentController as CustomerPaymentContro
 use App\Http\Controllers\Api\Customer\RegistrationController;
 use App\Http\Controllers\Api\Customer\ShipmentController as CustomerShipmentController;
 use App\Http\Controllers\Api\Customer\UserController as CustomerUserController;
+use App\Http\Controllers\Api\MasterMetadataController;
 use App\Http\Controllers\Api\MidtransWebhookController;
 use App\Http\Controllers\Api\PublicBookingEstimateController;
 use App\Http\Controllers\Api\PublicTrackingController;
@@ -39,6 +40,8 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [RegistrationController::class, 'register']);
 Route::post('/forgot-password', [\App\Http\Controllers\Api\ForgotPasswordController::class, 'sendResetLinkEmail']);
 Route::post('/reset-password', [\App\Http\Controllers\Api\ForgotPasswordController::class, 'reset']);
+
+Route::get('/register/check-company-code', [RegistrationController::class, 'checkCompanyCode']);
 Route::get('/tracking', [PublicTrackingController::class, 'track'])->name('public.tracking');
 Route::get('/tracking/consignment-note-pdf', [PublicTrackingController::class, 'consignmentNotePdf']);
 Route::get('/tracking/waybill-pdf', [PublicTrackingController::class, 'waybillPdf']);
@@ -53,6 +56,11 @@ Route::prefix('public')->group(function () {
     Route::get('master/cargo-categories', [MasterDataReadController::class, 'cargoCategories']);
     Route::get('master/dg-classes', [MasterDataReadController::class, 'dgClasses']);
     Route::get('master/additional-charges', [MasterDataReadController::class, 'additionalCharges']);
+
+    // Registration form metadata (dropdown options that live in code, not DB)
+    Route::get('master/business-entity-types', [MasterMetadataController::class, 'businessEntityTypes']);
+    Route::get('master/business-categories', [MasterMetadataController::class, 'businessCategories']);
+    Route::get('master/monthly-shipment-estimates', [MasterMetadataController::class, 'monthlyShipmentEstimates']);
     Route::post('bookings/estimate-price', [PublicBookingEstimateController::class, 'estimate']);
 });
 // Midtrans notification (no auth - called by Midtrans)
