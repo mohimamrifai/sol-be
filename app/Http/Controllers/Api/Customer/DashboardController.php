@@ -26,7 +26,7 @@ class DashboardController extends Controller
     private const UNPAID_INVOICE_STATUSES = ['unpaid', 'overdue'];
 
     /**
-     * Aggregated payload for the customer dashboard (per prompt.md brief).
+     * Aggregated payload for the customer dashboard.
      *  - 6 stat cards
      *  - 4 recent tables (max 5 rows each)
      *  - 5 latest activity notifications (derived from bookings/shipments/invoices/payments)

@@ -4,12 +4,15 @@ namespace App\Http\Controllers\Api\Customer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
+use App\Models\BookingAttachment;
 use App\Models\Invoice;
 use App\Models\Shipment;
 use App\Services\BookingPriceEstimateService;
 use App\Services\MidtransService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class BookingController extends Controller
 {
@@ -19,7 +22,77 @@ class BookingController extends Controller
     ) {}
 
     /**
-     * Get estimated price for a booking (before submit). No booking is created.
+     * List bookings for the logged-in customer's company (spec L5).
+     *
+     * Supports filters: search (booking_no, shipper, consignee), status,
+     * service_type, shipment_coverage, date_from/date_to (booking date).
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $query = Booking::with([
+            'originLocation:id,name,code',
+            'destinationLocation:id,name,code',
+            'serviceType:id,name,code',
+            'transportMode:id,name',
+            'shipment:id,booking_id',
+        ])->where('company_id', $user->company_id);
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+        if ($request->filled('service_type_id')) {
+            $query->where('service_type_id', $request->service_type_id);
+        }
+        if ($request->filled('shipment_coverage')) {
+            $query->where('shipment_coverage', $request->shipment_coverage);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
+        if ($request->filled('search')) {
+            $needle = '%' . $request->search . '%';
+            $query->where(function ($q) use ($needle) {
+                $q->where('booking_number', 'like', $needle)
+                    ->orWhere('shipper_name', 'like', $needle)
+                    ->orWhere('consignee_name', 'like', $needle);
+            });
+        }
+
+        $perPage = (int) ($request->per_page ?? 15);
+
+        return response()->json($query->orderBy('created_at', 'desc')->paginate($perPage));
+    }
+
+    /**
+     * Booking stats for the 4 spec cards (L19-23): Draft, Submitted, Approved, Rejected.
+     */
+    public function stats(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $counts = Booking::where('company_id', $user->company_id)
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        return response()->json([
+            'data' => [
+                'draft' => (int) ($counts['draft'] ?? 0),
+                'submitted' => (int) ($counts['submitted'] ?? 0),
+                'approved' => (int) ($counts['approved'] ?? 0),
+                'rejected' => (int) ($counts['rejected'] ?? 0),
+            ],
+        ]);
+    }
+
+    /**
+     * Cost estimation. Accepts an `is_draft` boolean flag so the customer
+     * can preview the price before deciding to save (spec L8: draft
+     * generates a booking number only on first save).
      */
     public function estimatePrice(Request $request): JsonResponse
     {
@@ -30,6 +103,7 @@ class BookingController extends Controller
             'destination_location_id' => 'required|exists:locations,id',
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'service_type_id' => 'required|exists:service_types,id',
+            'shipment_coverage' => 'nullable|in:port_to_port,door_to_port,port_to_door,door_to_door',
             'cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:0',
@@ -57,37 +131,31 @@ class BookingController extends Controller
 
         return response()->json(['data' => $result]);
     }
-    public function index(Request $request): JsonResponse
-    {
-        $user = $request->user();
 
-        $query = Booking::with([
-            'originLocation:id,name,code', 'destinationLocation:id,name,code',
-            'serviceType:id,name,code', 'transportMode:id,name',
-            'shipment:id,booking_id'
-        ])->where('company_id', $user->company_id);
-
-        if ($request->filled('status')) $query->where('status', $request->status);
-
-        return response()->json($query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15));
-    }
-
+    /**
+     * Create a booking. Supports `is_draft=true` to save a draft without
+     * forcing the customer to complete every field (spec L8-10).
+     */
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        // Cek apakah company punya invoice overdue
         if ($user->company && $user->company->hasOverdueInvoices()) {
             return response()->json([
                 'message' => 'Perusahaan Anda memiliki invoice jatuh tempo. Silakan lunasi terlebih dahulu.',
             ], 403);
         }
 
+        $isDraft = filter_var($request->input('is_draft', false), FILTER_VALIDATE_BOOLEAN);
+
         $data = $request->validate([
+            'is_draft' => 'nullable|boolean',
+
             'origin_location_id' => 'required|exists:locations,id',
             'destination_location_id' => 'required|exists:locations,id',
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'service_type_id' => 'required|exists:service_types,id',
+            'shipment_coverage' => 'nullable|in:port_to_port,door_to_port,port_to_door,door_to_door',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:0',
             'estimated_weight' => 'nullable|numeric|min:0',
@@ -95,211 +163,234 @@ class BookingController extends Controller
             'length' => 'nullable|numeric|min:0',
             'width' => 'nullable|numeric|min:0',
             'height' => 'nullable|numeric|min:0',
-            'cargo_category_id' => 'required|exists:cargo_categories,id',
+
+            // For draft we let customer skip cargo details.
+            'cargo_category_id' => $isDraft ? 'nullable|exists:cargo_categories,id' : 'required|exists:cargo_categories,id',
             'cargo_description' => [
                 'nullable', 'string',
-                // Rule 8.3: Mixed Cargo requires description
-                function ($attribute, $value, $fail) use ($request) {
+                function ($attribute, $value, $fail) use ($request, $isDraft) {
+                    if ($isDraft) return;
                     $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->code === 'MIX' && empty($value)) {
                         $fail('Deskripsi barang wajib diisi untuk kategori Mixed Cargo.');
                     }
                 }
             ],
+
             'departure_date' => 'nullable|date|after_or_equal:today',
+
+            // Snapshot shipper & consignee (spec L7)
             'shipper_name' => 'required|string|max:255',
             'shipper_address' => 'required|string',
             'shipper_phone' => 'required|string|max:50',
             'consignee_name' => 'required|string|max:255',
             'consignee_address' => 'required|string',
             'consignee_phone' => 'required|string|max:50',
+
             'notes' => 'nullable|string',
-            'additional_services' => 'nullable', // Can be JSON string from FormData
-            
-            // New fields with strict validation
-            'is_dangerous_goods' => 'nullable|in:0,1,true,false',
+            'additional_services' => 'nullable',
+
+            'is_dangerous_goods' => 'nullable|boolean',
             'dg_class_id' => 'nullable|required_if:is_dangerous_goods,1|exists:dg_classes,id',
             'un_number' => 'nullable|required_if:is_dangerous_goods,1|string|max:50',
             'msds_file' => 'nullable|required_if:is_dangerous_goods,1|file|mimes:pdf|max:5120',
             'equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'temperature' => [
                 'nullable', 'numeric',
-                function ($attribute, $value, $fail) use ($request) {
+                function ($attribute, $value, $fail) use ($request, $isDraft) {
+                    if ($isDraft) return;
                     $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->requires_temperature && $value === null) {
                         $fail('Suhu (temperature) wajib diisi untuk kategori kargo ini.');
                     }
                 }
             ],
+
+            // Per-item payload (LCL packages[] / FCL containers[])
+            'packages' => 'nullable|array',
+            'packages.*.description' => 'nullable|string|max:500',
+            'packages.*.length' => 'nullable|numeric|min:0',
+            'packages.*.width' => 'nullable|numeric|min:0',
+            'packages.*.height' => 'nullable|numeric|min:0',
+            'packages.*.weight_kg' => 'nullable|numeric|min:0',
+            'packages.*.piece_count' => 'nullable|integer|min:1',
+            'packages.*.package_type' => 'nullable|string|max:80',
+            'packages.*.is_dangerous_goods' => 'nullable|boolean',
+            'packages.*.dg_class_id' => 'nullable|exists:dg_classes,id',
+            'packages.*.un_number' => 'nullable|string|max:50',
+            'packages.*.msds_file' => 'nullable|file|mimes:pdf|max:5120',
+            'packages.*.dg_notes' => 'nullable|string',
+
+            'containers' => 'nullable|array',
+            'containers.*.container_type_id' => 'nullable|exists:container_types,id',
+            'containers.*.container_number' => 'nullable|string|max:20',
+            'containers.*.seal_number' => 'nullable|string|max:50',
+            'containers.*.gross_weight_kg' => 'nullable|numeric|min:0',
+            'containers.*.volume_cbm' => 'nullable|numeric|min:0',
+            'containers.*.equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
+            'containers.*.temperature' => 'nullable|numeric',
+            'containers.*.is_dangerous_goods' => 'nullable|boolean',
+            'containers.*.dg_class_id' => 'nullable|exists:dg_classes,id',
+            'containers.*.un_number' => 'nullable|string|max:50',
+            'containers.*.msds_file' => 'nullable|file|mimes:pdf|max:5120',
+            'containers.*.dg_notes' => 'nullable|string',
+
+            'attachments' => 'nullable|array',
+            'attachments.*' => 'file|max:10240',
         ]);
 
-        // Handle additional_services if it came from FormData as a JSON string
         if (is_string($request->additional_services)) {
             $data['additional_services'] = json_decode($request->additional_services, true);
         }
 
-        $estimateParams = [
-            'origin_location_id' => $data['origin_location_id'],
-            'destination_location_id' => $data['destination_location_id'],
-            'transport_mode_id' => $data['transport_mode_id'],
-            'service_type_id' => $data['service_type_id'],
-            'container_type_id' => $data['container_type_id'] ?? null,
-            'container_count' => $data['container_count'] ?? 1,
-            'estimated_weight' => $data['estimated_weight'] ?? 0,
-            'estimated_cbm' => $data['estimated_cbm'] ?? 0,
-            'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
-            'company_id' => $user->company_id,
-        ];
-        $estimate = $this->priceEstimateService->estimate($estimateParams);
-
-        // Handle MSDS file upload
-        $msdsPath = null;
-        if ($request->hasFile('msds_file')) {
-            $msdsPath = $request->file('msds_file')->store('msds_files', 'public');
-        }
-
-        $booking = Booking::create([
-            ...$data,
-            'company_id' => $user->company_id,
-            'user_id' => $user->id,
-            'status' => 'submitted',
-            'estimated_price' => $estimate['estimated_price'],
-            'msds_file' => $msdsPath,
-            'additional_services' => null, // Remove from data array to avoid conflict with relationship
-        ]);
-
-        // Tambah layanan tambahan
-        if (! empty($data['additional_services'])) {
-            foreach ($data['additional_services'] as $svc) {
-                $booking->additionalServices()->attach($svc['id'], [
-                    'notes' => $svc['notes'] ?? null,
-                ]);
-            }
-        }
-        $booking->load(['company', 'user', 'cargoCategory', 'dgClass', 'originLocation', 'destinationLocation', 'serviceType', 'additionalServices']);
-
-        $prepaidPayload = null;
-
-        // Jika perusahaan menggunakan skema pre-paid, langsung buat shipment, invoice, dan transaksi Midtrans.
-        if ($booking->company && $booking->company->payment_type === 'prepaid') {
-            // Set booking menjadi approved oleh sistem
-            $booking->update([
-                'status' => 'approved',
-                'approved_by' => $user->id,
-                'approved_at' => now(),
-            ]);
-
-            // Buat shipment mirip convertToShipment admin
-            $shipment = Shipment::create([
-                'booking_id' => $booking->id,
-                'company_id' => $booking->company_id,
-                'origin_location_id' => $booking->origin_location_id,
-                'destination_location_id' => $booking->destination_location_id,
-                'transport_mode_id' => $booking->transport_mode_id,
-                'service_type_id' => $booking->service_type_id,
-                'status' => 'created',
-                'created_by' => $user->id,
-                'cargo_category_id' => $booking->cargo_category_id,
-                'is_dangerous_goods' => $booking->is_dangerous_goods,
-                'dg_class_id' => $booking->dg_class_id,
-                'un_number' => $booking->un_number,
-                'msds_file' => $booking->msds_file,
-                'equipment_condition' => $booking->equipment_condition,
-                'temperature' => $booking->temperature,
-            ]);
-
-            $shipment->trackings()->create([
-                'status' => 'created',
-                'notes' => 'Shipment dibuat otomatis (pre-paid) dari booking '.$booking->booking_number,
-                'tracked_at' => now(),
-                'updated_by' => $user->id,
-            ]);
-
-            // Buat invoice dari estimated price
-            $issuedDate = now()->toDateString();
-            $dueDate = $issuedDate; // pre-paid: jatuh tempo sama dengan tanggal terbit
-            $subtotal = (float) ($estimate['estimated_price'] ?? 0);
-            $taxAmount = $subtotal * 0.11;
-            $totalAmount = $subtotal + $taxAmount;
-
-            $invoice = Invoice::create([
-                'shipment_id' => $shipment->id,
-                'company_id' => $booking->company_id,
-                'issued_date' => $issuedDate,
-                'due_date' => $dueDate,
-                'subtotal' => $subtotal,
-                'tax_amount' => $taxAmount,
-                'total_amount' => $totalAmount,
-                'status' => 'unpaid',
-                'notes' => null,
-                'created_by' => $user->id,
-            ]);
-
-            $breakdown = $estimate['breakdown'];
-            $baseFreight = (float) ($breakdown['base_freight'] ?? 0);
-            $discount = (float) ($breakdown['discount_amount'] ?? 0);
-
-            if ($baseFreight > 0) {
-                $invoice->items()->create([
-                    'description' => 'Freight / Tarif Pengiriman',
-                    'quantity' => 1,
-                    'unit_price' => $baseFreight,
-                    'total_price' => $baseFreight,
-                ]);
+        return DB::transaction(function () use ($request, $user, $data, $isDraft) {
+            $estimate = null;
+            if (! $isDraft) {
+                $estimateParams = [
+                    'origin_location_id' => $data['origin_location_id'],
+                    'destination_location_id' => $data['destination_location_id'],
+                    'transport_mode_id' => $data['transport_mode_id'],
+                    'service_type_id' => $data['service_type_id'],
+                    'shipment_coverage' => $data['shipment_coverage'] ?? null,
+                    'container_type_id' => $data['container_type_id'] ?? null,
+                    'container_count' => $data['container_count'] ?? 1,
+                    'estimated_weight' => $data['estimated_weight'] ?? 0,
+                    'estimated_cbm' => $data['estimated_cbm'] ?? 0,
+                    'length' => $data['length'] ?? 0,
+                    'width' => $data['width'] ?? 0,
+                    'height' => $data['height'] ?? 0,
+                    'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
+                    'company_id' => $user->company_id,
+                ];
+                $estimate = $this->priceEstimateService->estimate($estimateParams);
             }
 
-            if ($discount > 0) {
-                $invoice->items()->create([
-                    'description' => 'Diskon Pengiriman',
-                    'quantity' => 1,
-                    'unit_price' => -$discount,
-                    'total_price' => -$discount,
-                ]);
+            // Booking-level MSDS (legacy field) – still kept for the
+            // single-item case. Real apps with multiple DG items should
+            // attach the MSDS to the per-package / per-container row.
+            $msdsPath = null;
+            if ($request->hasFile('msds_file')) {
+                $msdsPath = $request->file('msds_file')->store('msds_files', 'public');
             }
 
-            $additionalDetail = $breakdown['additional_services_detail'] ?? [];
-            foreach ($additionalDetail as $addSvc) {
-                $price = (float) ($addSvc['base_price'] ?? 0);
-                if ($price > 0) {
-                    $invoice->items()->create([
-                        'description' => 'Layanan Tambahan: ' . ($addSvc['name'] ?? 'Unknown'),
-                        'quantity' => 1,
-                        'unit_price' => $price,
-                        'total_price' => $price,
+            $booking = Booking::create([
+                ...$data,
+                'company_id' => $user->company_id,
+                'user_id' => $user->id,
+                'status' => $isDraft ? Booking::STATUS_DRAFT : Booking::STATUS_SUBMITTED,
+                'estimated_price' => $estimate['estimated_price'] ?? null,
+                'msds_file' => $msdsPath,
+                'additional_services' => null, // we use the relationship below
+            ]);
+            $booking->recalculateCargoMetrics();
+            $booking->save();
+
+            // Snapshot additional services
+            if (! empty($data['additional_services'])) {
+                foreach ($data['additional_services'] as $svc) {
+                    $booking->additionalServices()->attach($svc['id'], [
+                        'notes' => $svc['notes'] ?? null,
                     ]);
                 }
             }
 
-            if ($taxAmount > 0) {
-                $invoice->items()->create([
-                    'description' => 'PPN (11%)',
-                    'quantity' => 1,
-                    'unit_price' => $taxAmount,
-                    'total_price' => $taxAmount,
-                ]);
+            // Per-item packages (LCL)
+            if (! empty($data['packages'])) {
+                $sequence = 1;
+                foreach ($data['packages'] as $i => $pkg) {
+                    $msdsItem = $request->file("packages.{$i}.msds_file");
+                    $pkgMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $booking->packages()->create([
+                        'sequence' => $sequence++,
+                        'description' => $pkg['description'] ?? null,
+                        'length' => $pkg['length'] ?? null,
+                        'width' => $pkg['width'] ?? null,
+                        'height' => $pkg['height'] ?? null,
+                        'weight_kg' => $pkg['weight_kg'] ?? null,
+                        'volume_cbm' => $this->calcPackageCbm($pkg),
+                        'piece_count' => $pkg['piece_count'] ?? 1,
+                        'package_type' => $pkg['package_type'] ?? null,
+                        'is_dangerous_goods' => $pkg['is_dangerous_goods'] ?? false,
+                        'dg_class_id' => $pkg['dg_class_id'] ?? null,
+                        'un_number' => $pkg['un_number'] ?? null,
+                        'msds_file_path' => $pkgMsds,
+                        'dg_notes' => $pkg['dg_notes'] ?? null,
+                    ]);
+                }
             }
 
-            // Buat transaksi Midtrans (Snap)
-            $customerDetails = [
-                'name' => $user->name,
-                'email' => $user->email,
-                'phone' => $user->phone,
-            ];
+            // Per-item containers (FCL)
+            if (! empty($data['containers'])) {
+                $sequence = 1;
+                foreach ($data['containers'] as $i => $ctr) {
+                    $msdsItem = $request->file("containers.{$i}.msds_file");
+                    $ctrMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $booking->containers()->create([
+                        'sequence' => $sequence++,
+                        'container_type_id' => $ctr['container_type_id'] ?? null,
+                        'container_number' => $ctr['container_number'] ?? null,
+                        'seal_number' => $ctr['seal_number'] ?? null,
+                        'gross_weight_kg' => $ctr['gross_weight_kg'] ?? null,
+                        'volume_cbm' => $ctr['volume_cbm'] ?? null,
+                        'equipment_condition' => $ctr['equipment_condition'] ?? null,
+                        'temperature' => $ctr['temperature'] ?? null,
+                        'is_dangerous_goods' => $ctr['is_dangerous_goods'] ?? false,
+                        'dg_class_id' => $ctr['dg_class_id'] ?? null,
+                        'un_number' => $ctr['un_number'] ?? null,
+                        'msds_file_path' => $ctrMsds,
+                        'dg_notes' => $ctr['dg_notes'] ?? null,
+                    ]);
+                }
+            }
 
-            $snap = $this->midtransService->createSnapTransaction($invoice, $customerDetails);
-            $prepaidPayload = [
-                'invoice' => $invoice->load('items'),
-                'midtrans' => $snap,
-            ];
-        }
+            // Generic attachments
+            if (! empty($data['attachments'])) {
+                foreach ($request->file('attachments') as $file) {
+                    $path = $file->store('booking_attachments', 'public');
+                    $booking->attachments()->create([
+                        'uploaded_by' => $user->id,
+                        'file_path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'file_size' => $file->getSize(),
+                        'category' => 'general',
+                    ]);
+                }
+            }
 
-        return response()->json([
-            'message' => 'Booking berhasil dibuat.',
-            'data' => $booking,
-            'estimated_price' => $estimate['estimated_price'],
-            'breakdown' => $estimate['breakdown'],
-            'prepaid' => $prepaidPayload,
-        ], 201);
+            // Log activity (spec L70-83)
+            $booking->recordActivity(
+                $isDraft ? 'created_draft' : 'created_submitted',
+                $isDraft ? 'Booking dibuat sebagai draft' : 'Booking dibuat & disubmit',
+                $isDraft ? 'Nomor booking dibuat otomatis.' : null,
+                ['status' => $booking->status],
+                $user,
+            );
+
+            $booking->load([
+                'company', 'user', 'cargoCategory', 'dgClass',
+                'originLocation', 'destinationLocation', 'transportMode',
+                'serviceType', 'containerType', 'additionalServices',
+                'shipment', 'activities', 'attachments', 'packages.dgClass', 'containers.dgClass',
+            ]);
+
+            $prepaidPayload = null;
+
+            // Pre-paid companies auto-approve and create shipment + invoice
+            if (! $isDraft && $booking->company && $booking->company->payment_type === 'prepaid') {
+                $prepaidPayload = $this->autoApproveForPrepaid($booking, $estimate, $user);
+            }
+
+            return response()->json([
+                'message' => $isDraft
+                    ? 'Booking berhasil disimpan sebagai draft.'
+                    : 'Booking berhasil dibuat.',
+                'data' => $booking,
+                'estimated_price' => $estimate['estimated_price'] ?? null,
+                'breakdown' => $estimate['breakdown'] ?? null,
+                'prepaid' => $prepaidPayload,
+            ], 201);
+        });
     }
 
     public function show(Request $request, Booking $booking): JsonResponse
@@ -313,12 +404,41 @@ class BookingController extends Controller
         $booking->load([
             'company', 'user', 'cargoCategory', 'dgClass',
             'originLocation', 'destinationLocation', 'transportMode',
-            'serviceType', 'containerType', 'additionalServices', 'shipment',
+            'serviceType', 'containerType', 'additionalServices',
+            'shipment', 'activities.actor', 'attachments.uploader',
+            'packages.dgClass', 'containers.dgClass', 'containers.containerType',
         ]);
+        $booking->setAttribute('has_shipment', $booking->shipment()->exists());
+        $booking->setAttribute('available_actions', $this->availableActions($booking));
+
+        $costBreakdown = null;
+        if ($booking->estimated_price !== null) {
+            $estimate = $this->priceEstimateService->estimate([
+                'origin_location_id' => $booking->origin_location_id,
+                'destination_location_id' => $booking->destination_location_id,
+                'transport_mode_id' => $booking->transport_mode_id,
+                'service_type_id' => $booking->service_type_id,
+                'shipment_coverage' => $booking->shipment_coverage,
+                'container_type_id' => $booking->container_type_id,
+                'container_count' => $booking->container_count ?? 1,
+                'estimated_weight' => $booking->estimated_weight ?? 0,
+                'estimated_cbm' => $booking->estimated_cbm ?? 0,
+                'length' => $booking->length ?? 0,
+                'width' => $booking->width ?? 0,
+                'height' => $booking->height ?? 0,
+                'additional_services' => $booking->additionalServices->pluck('id')->all(),
+                'company_id' => $booking->company_id,
+            ]);
+            $costBreakdown = $estimate['breakdown'] ?? null;
+        }
+        $booking->setAttribute('cost_breakdown', $costBreakdown);
 
         return response()->json(['data' => $booking]);
     }
 
+    /**
+     * Update booking. Only editable while in draft (spec L9).
+     */
     public function update(Request $request, Booking $booking): JsonResponse
     {
         $user = $request->user();
@@ -327,12 +447,10 @@ class BookingController extends Controller
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
-        if (!in_array($booking->status, ['submitted', 'approved'])) {
-            return response()->json(['message' => 'Hanya booking dengan status "Submitted" atau "Approved" yang dapat diedit.'], 422);
-        }
-
-        if ($booking->status === 'approved' && $booking->shipment()->exists()) {
-            return response()->json(['message' => 'Booking yang sudah memiliki shipment tidak dapat diedit.'], 422);
+        if (! $booking->isEditable()) {
+            return response()->json([
+                'message' => 'Booking hanya dapat diedit pada status Draft.',
+            ], 422);
         }
 
         $data = $request->validate([
@@ -340,6 +458,7 @@ class BookingController extends Controller
             'destination_location_id' => 'required|exists:locations,id',
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'service_type_id' => 'required|exists:service_types,id',
+            'shipment_coverage' => 'nullable|in:port_to_port,door_to_port,port_to_door,door_to_door',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:0',
             'estimated_weight' => 'nullable|numeric|min:0',
@@ -347,7 +466,7 @@ class BookingController extends Controller
             'length' => 'nullable|numeric|min:0',
             'width' => 'nullable|numeric|min:0',
             'height' => 'nullable|numeric|min:0',
-            'cargo_category_id' => 'required|exists:cargo_categories,id',
+            'cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'cargo_description' => 'nullable|string',
             'departure_date' => 'nullable|date|after_or_equal:today',
             'shipper_name' => 'required|string|max:255',
@@ -357,66 +476,124 @@ class BookingController extends Controller
             'consignee_address' => 'required|string',
             'consignee_phone' => 'required|string|max:50',
             'notes' => 'nullable|string',
-            'additional_services' => 'nullable', // Can be JSON string from FormData
-            'is_dangerous_goods' => 'nullable|in:0,1,true,false',
-            'dg_class_id' => 'nullable|required_if:is_dangerous_goods,1,true|exists:dg_classes,id',
-            'un_number' => 'nullable|required_if:is_dangerous_goods,1,true|string|max:50',
+            'additional_services' => 'nullable',
+            'is_dangerous_goods' => 'nullable|boolean',
+            'dg_class_id' => 'nullable|required_if:is_dangerous_goods,1|exists:dg_classes,id',
+            'un_number' => 'nullable|required_if:is_dangerous_goods,1|string|max:50',
             'msds_file' => 'nullable|file|mimes:pdf|max:5120',
             'equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'temperature' => 'nullable|numeric',
         ]);
 
-        // Handle additional_services if it came from FormData as a JSON string
         if (is_string($request->additional_services)) {
             $data['additional_services'] = json_decode($request->additional_services, true);
         }
 
-        $estimateParams = [
-            ...$data,
-            'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
-            'company_id' => $user->company_id,
-        ];
-        $estimate = $this->priceEstimateService->estimate($estimateParams);
+        return DB::transaction(function () use ($request, $user, $booking, $data) {
+            $msdsPath = $booking->msds_file;
+            if ($request->hasFile('msds_file')) {
+                $msdsPath = $request->file('msds_file')->store('msds_files', 'public');
+            }
 
-        // Update basic booking data
-        $updatePayload = [
-            ...$data,
-            'estimated_price' => $estimate['estimated_price'],
-        ];
+            $estimateParams = [
+                'origin_location_id' => $data['origin_location_id'],
+                'destination_location_id' => $data['destination_location_id'],
+                'transport_mode_id' => $data['transport_mode_id'],
+                'service_type_id' => $data['service_type_id'],
+                'shipment_coverage' => $data['shipment_coverage'] ?? null,
+                'container_type_id' => $data['container_type_id'] ?? null,
+                'container_count' => $data['container_count'] ?? 1,
+                'estimated_weight' => $data['estimated_weight'] ?? 0,
+                'estimated_cbm' => $data['estimated_cbm'] ?? 0,
+                'length' => $data['length'] ?? 0,
+                'width' => $data['width'] ?? 0,
+                'height' => $data['height'] ?? 0,
+                'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
+                'company_id' => $user->company_id,
+            ];
+            $estimate = $this->priceEstimateService->estimate($estimateParams);
 
-        // Handle MSDS file upload
-        if ($request->hasFile('msds_file')) {
-            $updatePayload['msds_file'] = $request->file('msds_file')->store('msds_files', 'public');
-        }
+            $updatePayload = [
+                ...$data,
+                'estimated_price' => $estimate['estimated_price'],
+                'msds_file' => $msdsPath,
+            ];
+            unset($updatePayload['additional_services']);
 
-        // Remove additional_services from payload to avoid column not found error
-        unset($updatePayload['additional_services']);
+            $booking->fill($updatePayload);
+            $booking->recalculateCargoMetrics();
+            $booking->save();
 
-        // Jika statusnya approved, kembalikan menjadi submitted karena ada perubahan data
-        if ($booking->status === 'approved') {
-            $updatePayload['status'] = 'submitted';
-            $updatePayload['notes'] = trim($booking->notes . "\n[System: Status diubah ke Submitted karena Customer melakukan Edit]");
-        }
-
-        $booking->update($updatePayload);
-
-        // Sync additional services
-        $syncData = [];
-        if (! empty($data['additional_services'])) {
-            foreach ($data['additional_services'] as $svc) {
+            $syncData = [];
+            foreach ($data['additional_services'] ?? [] as $svc) {
                 $syncData[$svc['id']] = ['notes' => $svc['notes'] ?? null];
             }
+            $booking->additionalServices()->sync($syncData);
+
+            $booking->recordActivity(
+                'edited',
+                'Draft diperbarui',
+                null,
+                null,
+                $user,
+            );
+
+            $booking->load([
+                'company', 'user', 'cargoCategory', 'dgClass',
+                'originLocation', 'destinationLocation', 'transportMode',
+                'serviceType', 'containerType', 'additionalServices',
+                'shipment', 'activities.actor', 'attachments.uploader',
+                'packages.dgClass', 'containers.dgClass',
+            ]);
+
+            return response()->json([
+                'message' => 'Draft booking berhasil diperbarui.',
+                'data' => $booking,
+                'estimated_price' => $estimate['estimated_price'],
+                'breakdown' => $estimate['breakdown'],
+            ]);
+        });
+    }
+
+    /**
+     * Move a draft to "submitted" (spec L9-10).
+     */
+    public function submit(Request $request, Booking $booking): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($booking->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
         }
-        $booking->additionalServices()->sync($syncData);
+
+        if ($booking->status !== Booking::STATUS_DRAFT) {
+            return response()->json([
+                'message' => 'Hanya booking dengan status Draft yang dapat disubmit.',
+            ], 422);
+        }
+
+        $booking->update(['status' => Booking::STATUS_SUBMITTED]);
+        $booking->recordActivity(
+            'submitted',
+            'Booking disubmit',
+            'Menunggu review internal.',
+            null,
+            $user,
+        );
+
+        $booking->load(['activities.actor', 'shipment']);
 
         return response()->json([
-            'message' => 'Booking berhasil diperbarui.',
-            'data' => $booking->fresh(['company', 'user', 'cargoCategory', 'dgClass', 'originLocation', 'destinationLocation', 'serviceType', 'additionalServices']),
-            'estimated_price' => $estimate['estimated_price'],
-            'breakdown' => $estimate['breakdown'],
+            'message' => 'Booking berhasil disubmit.',
+            'data' => $booking,
         ]);
     }
 
+    /**
+     * Cancel a draft or submitted booking (spec L10). For pre-paid companies
+     * the booking is marked rejected with the user-supplied reason so the
+     * activity log keeps a single narrative thread.
+     */
     public function cancel(Request $request, Booking $booking): JsonResponse
     {
         $user = $request->user();
@@ -426,23 +603,322 @@ class BookingController extends Controller
         }
 
         $request->validate([
-            'reason' => 'required|string|max:1000'
+            'reason' => 'required|string|max:1000',
         ]);
 
-        if (!in_array($booking->status, ['submitted', 'approved'])) {
-            return response()->json(['message' => 'Hanya booking dengan status Submitted atau Approved yang dapat dibatalkan.'], 422);
-        }
-        
-        // Prevent cancel if shipment already exists
-        if ($booking->shipment()->exists()) {
-            return response()->json(['message' => 'Booking ini sudah diproses menjadi Shipment dan tidak dapat dibatalkan.'], 422);
+        if (! $booking->isCancellable()) {
+            return response()->json([
+                'message' => 'Booking ini tidak dapat dibatalkan.',
+            ], 422);
         }
 
         $booking->update([
-            'status' => 'cancelled',
-            'notes' => trim($booking->notes . "\n[System: Dibatalkan oleh Customer. Alasan: " . $request->reason . "]"),
+            'status' => Booking::STATUS_REJECTED,
+            'rejection_reason' => '[Customer cancel] ' . $request->reason,
+        ]);
+        $booking->recordActivity(
+            'cancelled',
+            'Booking dibatalkan oleh customer',
+            $request->reason,
+            ['reason' => $request->reason],
+            $user,
+        );
+
+        return response()->json([
+            'message' => 'Booking berhasil dibatalkan.',
+            'data' => $booking->fresh('activities.actor'),
+        ]);
+    }
+
+    /**
+     * Duplicate an existing booking into a new draft (spec L12). The duplicate
+     * keeps the customer-facing snapshot fields but starts a fresh booking
+     * number and resets any review state.
+     */
+    public function duplicate(Request $request, Booking $booking): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($booking->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        return DB::transaction(function () use ($user, $booking) {
+            $new = $booking->replicate([
+                'booking_number',
+                'status',
+                'estimated_price',
+                'rejection_reason',
+                'notes',
+                'approved_by',
+                'approved_at',
+                'total_volume_cbm',
+                'volume_weight_kg',
+                'chargeable_weight_kg',
+            ]);
+            $new->status = Booking::STATUS_DRAFT;
+            $new->estimated_price = null;
+            $new->user_id = $user->id;
+            $new->save();
+
+            // Copy many-to-many additional services
+            foreach ($booking->additionalServices as $svc) {
+                $new->additionalServices()->attach($svc->id, [
+                    'notes' => $svc->pivot->notes,
+                ]);
+            }
+
+            // Copy packages & containers so the customer does not retype them
+            foreach ($booking->packages as $pkg) {
+                $pkgClone = $pkg->replicate();
+                $pkgClone->booking_id = $new->id;
+                $pkgClone->save();
+            }
+            foreach ($booking->containers as $ctr) {
+                $ctrClone = $ctr->replicate();
+                $ctrClone->booking_id = $new->id;
+                $ctrClone->save();
+            }
+
+            $new->recordActivity(
+                'duplicated',
+                'Booking diduplikasi',
+                'Sumber: ' . $booking->booking_number,
+                ['source_booking_id' => $booking->id, 'source_booking_number' => $booking->booking_number],
+                $user,
+            );
+
+            $new->load([
+                'company', 'user', 'cargoCategory', 'dgClass',
+                'originLocation', 'destinationLocation', 'transportMode',
+                'serviceType', 'containerType', 'additionalServices',
+                'activities.actor', 'attachments', 'packages.dgClass', 'containers.dgClass',
+            ]);
+
+            return response()->json([
+                'message' => 'Booking diduplikasi sebagai draft baru.',
+                'data' => $new,
+            ], 201);
+        });
+    }
+
+    /**
+     * Timeline of activities for a booking (spec L70-76). The same activities
+     * back Section 6 of the detail view (spec L78-84); the client filters
+     * by `activity_type` to render the two views.
+     */
+    public function activities(Request $request, Booking $booking): JsonResponse
+    {
+        $user = $request->user();
+        if ($booking->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        return response()->json([
+            'data' => $booking->activities()->with('actor:id,name')->orderBy('occurred_at')->get(),
+        ]);
+    }
+
+    public function uploadAttachment(Request $request, Booking $booking): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($booking->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        $data = $request->validate([
+            'file' => 'required|file|max:10240',
+            'category' => 'nullable|string|max:50',
         ]);
 
-        return response()->json(['message' => 'Booking berhasil dibatalkan.', 'data' => $booking]);
+        $file = $request->file('file');
+        $path = $file->store('booking_attachments', 'public');
+
+        $attachment = $booking->attachments()->create([
+            'uploaded_by' => $user->id,
+            'file_path' => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type' => $file->getMimeType(),
+            'file_size' => $file->getSize(),
+            'category' => $data['category'] ?? 'general',
+        ]);
+
+        $booking->recordActivity(
+            'attachment_added',
+            'Lampiran ditambahkan',
+            $attachment->original_name,
+            ['attachment_id' => $attachment->id, 'category' => $attachment->category],
+            $user,
+        );
+
+        return response()->json([
+            'message' => 'Lampiran berhasil diunggah.',
+            'data' => $attachment,
+        ], 201);
+    }
+
+    public function deleteAttachment(Request $request, Booking $booking, BookingAttachment $attachment): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($booking->company_id !== $user->company_id || $attachment->booking_id !== $booking->id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        $attachment->delete();
+        $booking->recordActivity(
+            'attachment_removed',
+            'Lampiran dihapus',
+            $attachment->original_name,
+            ['attachment_id' => $attachment->id],
+            $user,
+        );
+
+        return response()->json(['message' => 'Lampiran dihapus.']);
+    }
+
+    // ── Internal helpers ───────────────────────────────────────────────
+
+    private function availableActions(Booking $booking): array
+    {
+        $actions = [];
+        switch ($booking->status) {
+            case Booking::STATUS_DRAFT:
+                $actions = ['edit', 'submit', 'cancel'];
+                break;
+            case Booking::STATUS_SUBMITTED:
+                $actions = $booking->isCancellable() ? ['view', 'cancel'] : ['view'];
+                break;
+            case Booking::STATUS_APPROVED:
+                $actions = ['view', 'duplicate'];
+                break;
+            case Booking::STATUS_REJECTED:
+                $actions = ['view', 'duplicate'];
+                break;
+            default:
+                $actions = ['view'];
+        }
+
+        return $actions;
+    }
+
+    private function calcPackageCbm(array $pkg): ?float
+    {
+        $l = (float) ($pkg['length'] ?? 0);
+        $w = (float) ($pkg['width'] ?? 0);
+        $h = (float) ($pkg['height'] ?? 0);
+
+        return $l > 0 && $w > 0 && $h > 0
+            ? round(($l * $w * $h) / 1_000_000, 4)
+            : null;
+    }
+
+    /**
+     * For pre-paid companies, immediately approve, build shipment, issue
+     * invoice and start a Midtrans transaction.
+     */
+    private function autoApproveForPrepaid(Booking $booking, ?array $estimate, $user): ?array
+    {
+        $booking->update([
+            'status' => Booking::STATUS_APPROVED,
+            'approved_by' => $user->id,
+            'approved_at' => now(),
+        ]);
+        $booking->recordActivity('approved', 'Booking disetujui otomatis (pre-paid)', null, null, $user);
+
+        $shipment = Shipment::create([
+            'booking_id' => $booking->id,
+            'company_id' => $booking->company_id,
+            'origin_location_id' => $booking->origin_location_id,
+            'destination_location_id' => $booking->destination_location_id,
+            'transport_mode_id' => $booking->transport_mode_id,
+            'service_type_id' => $booking->service_type_id,
+            'status' => 'created',
+            'created_by' => $user->id,
+            'cargo_category_id' => $booking->cargo_category_id,
+            'is_dangerous_goods' => $booking->is_dangerous_goods,
+            'dg_class_id' => $booking->dg_class_id,
+            'un_number' => $booking->un_number,
+            'msds_file' => $booking->msds_file,
+            'equipment_condition' => $booking->equipment_condition,
+            'temperature' => $booking->temperature,
+        ]);
+
+        $shipment->trackings()->create([
+            'status' => 'created',
+            'notes' => 'Shipment dibuat otomatis (pre-paid) dari booking ' . $booking->booking_number,
+            'tracked_at' => now(),
+            'updated_by' => $user->id,
+        ]);
+
+        $issuedDate = now()->toDateString();
+        $subtotal = (float) ($estimate['estimated_price'] ?? 0);
+        $taxAmount = $subtotal * 0.11;
+        $totalAmount = $subtotal + $taxAmount;
+
+        $invoice = Invoice::create([
+            'shipment_id' => $shipment->id,
+            'company_id' => $booking->company_id,
+            'issued_date' => $issuedDate,
+            'due_date' => $issuedDate,
+            'subtotal' => $subtotal,
+            'tax_amount' => $taxAmount,
+            'total_amount' => $totalAmount,
+            'status' => 'unpaid',
+            'notes' => null,
+            'created_by' => $user->id,
+        ]);
+
+        $breakdown = $estimate['breakdown'] ?? [];
+        $baseFreight = (float) ($breakdown['base_freight'] ?? 0);
+        $discount = (float) ($breakdown['discount_amount'] ?? 0);
+
+        if ($baseFreight > 0) {
+            $invoice->items()->create([
+                'description' => 'Freight / Tarif Pengiriman',
+                'quantity' => 1,
+                'unit_price' => $baseFreight,
+                'total_price' => $baseFreight,
+            ]);
+        }
+        if ($discount > 0) {
+            $invoice->items()->create([
+                'description' => 'Diskon Pengiriman',
+                'quantity' => 1,
+                'unit_price' => -$discount,
+                'total_price' => -$discount,
+            ]);
+        }
+        foreach ($breakdown['additional_services_detail'] ?? [] as $addSvc) {
+            $price = (float) ($addSvc['base_price'] ?? 0);
+            if ($price > 0) {
+                $invoice->items()->create([
+                    'description' => 'Layanan Tambahan: ' . ($addSvc['name'] ?? 'Unknown'),
+                    'quantity' => 1,
+                    'unit_price' => $price,
+                    'total_price' => $price,
+                ]);
+            }
+        }
+        if ($taxAmount > 0) {
+            $invoice->items()->create([
+                'description' => 'PPN (11%)',
+                'quantity' => 1,
+                'unit_price' => $taxAmount,
+                'total_price' => $taxAmount,
+            ]);
+        }
+
+        $snap = $this->midtransService->createSnapTransaction($invoice, [
+            'name' => $user->name,
+            'email' => $user->email,
+            'phone' => $user->phone,
+        ]);
+
+        return [
+            'invoice' => $invoice->load('items'),
+            'midtrans' => $snap,
+        ];
     }
 }

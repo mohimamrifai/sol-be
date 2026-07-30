@@ -240,11 +240,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Booking
         Route::post('bookings/estimate-price', [CustomerBookingController::class, 'estimatePrice']);
+        Route::get('bookings/stats', [CustomerBookingController::class, 'stats']);
         Route::get('bookings', [CustomerBookingController::class, 'index']);
         Route::post('bookings', [CustomerBookingController::class, 'store']);
         Route::get('bookings/{booking}', [CustomerBookingController::class, 'show']);
         Route::put('bookings/{booking}', [CustomerBookingController::class, 'update']);
+        Route::post('bookings/{booking}/submit', [CustomerBookingController::class, 'submit']);
         Route::post('bookings/{booking}/cancel', [CustomerBookingController::class, 'cancel']);
+        Route::post('bookings/{booking}/duplicate', [CustomerBookingController::class, 'duplicate']);
+        Route::get('bookings/{booking}/activities', [CustomerBookingController::class, 'activities']);
+        Route::post('bookings/{booking}/attachments', [CustomerBookingController::class, 'uploadAttachment']);
+        Route::delete('bookings/{booking}/attachments/{attachment}', [CustomerBookingController::class, 'deleteAttachment']);
 
         // Shipment
         Route::get('shipments', [CustomerShipmentController::class, 'index']);

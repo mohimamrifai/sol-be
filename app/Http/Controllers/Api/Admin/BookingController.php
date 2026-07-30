@@ -325,15 +325,46 @@ class BookingController extends Controller
             return response()->json(['message' => 'Booking tidak dalam status yang bisa disetujui.'], 422);
         }
 
+        $shipment = null;
+        $alreadyHadShipment = $booking->shipment()->exists();
+
         $booking->update([
             'status' => 'approved',
             'approved_by' => $request->user()->id,
             'approved_at' => now(),
         ]);
 
+        if (! $alreadyHadShipment) {
+            $shipment = Shipment::create([
+                'booking_id' => $booking->id,
+                'company_id' => $booking->company_id,
+                'origin_location_id' => $booking->origin_location_id,
+                'destination_location_id' => $booking->destination_location_id,
+                'transport_mode_id' => $booking->transport_mode_id,
+                'service_type_id' => $booking->service_type_id,
+                'status' => 'created',
+                'created_by' => $request->user()->id,
+                'cargo_category_id' => $booking->cargo_category_id,
+                'is_dangerous_goods' => $booking->is_dangerous_goods,
+                'dg_class_id' => $booking->dg_class_id,
+                'un_number' => $booking->un_number,
+                'msds_file' => $booking->msds_file,
+                'equipment_condition' => $booking->equipment_condition,
+                'temperature' => $booking->temperature,
+            ]);
+
+            $shipment->trackings()->create([
+                'status' => 'created',
+                'notes' => 'Shipment otomatis dibuat saat booking '.$booking->booking_number.' disetujui.',
+                'tracked_at' => now(),
+                'updated_by' => $request->user()->id,
+            ]);
+        }
+
         return response()->json([
-            'message' => 'Booking berhasil disetujui.',
-            'data' => $booking,
+            'message' => 'Booking berhasil disetujui dan otomatis dikonversi menjadi Shipment.',
+            'data' => $booking->fresh(['shipment']),
+            'shipment' => $shipment?->load('trackings'),
         ]);
     }
 

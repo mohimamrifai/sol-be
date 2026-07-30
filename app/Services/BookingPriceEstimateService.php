@@ -13,13 +13,14 @@ class BookingPriceEstimateService
     /**
      * Calculate estimated price for a booking based on route, service type, and optional extras.
      *
-     * @param  array{origin_location_id: int, destination_location_id: int, transport_mode_id: int, service_type_id: int, container_type_id?: int, container_count?: int, estimated_weight?: float, estimated_cbm?: float, additional_services?: array<int>, company_id?: int}  $params
-     * @return array{estimated_price: float, breakdown: array{base_freight: float, discount_amount: float, additional_services_total: float, additional_services_detail: array, total: float}, vendor_service_id: int|null}
+     * @param  array{origin_location_id: int, destination_location_id: int, transport_mode_id: int, service_type_id: int, shipment_coverage?: string, container_type_id?: int, container_count?: int, estimated_weight?: float, estimated_cbm?: float, length?: float, width?: float, height?: float, additional_services?: array<int>, company_id?: int}  $params
+     * @return array{estimated_price: float, breakdown: array{base_freight: float, pickup: float, delivery: float, discount_amount: float, additional_services_total: float, additional_services_detail: array, total: float}, vendor_service_id: int|null}
      */
     public function estimate(array $params): array
     {
         $companyId = $params['company_id'] ?? null;
         $additionalServiceIds = $params['additional_services'] ?? [];
+        $coverage = $params['shipment_coverage'] ?? null;
 
         // Find all matching vendor services (routes)
         $vendorServices = VendorService::query()
@@ -68,6 +69,21 @@ class BookingPriceEstimateService
         }
         $afterDiscount = max(0, $baseFreight - $discountAmount);
 
+        // Pickup / delivery surcharges (spec L62-65).
+        // The current pricing model does not have explicit pickup & delivery
+        // surcharge tables; we surface them as zero so the breakdown keeps
+        // the same line items the UI expects. Operations can override them
+        // out-of-band on the invoice.
+        $pickupCharge = 0.0;
+        $deliveryCharge = 0.0;
+        if ($coverage === 'door_to_port' || $coverage === 'door_to_door') {
+            // The "from-door" leg is metered separately; default to 0.
+            $pickupCharge = 0.0;
+        }
+        if ($coverage === 'port_to_door' || $coverage === 'door_to_door') {
+            $deliveryCharge = 0.0;
+        }
+
         // Additional services
         $additionalTotal = 0.0;
         $additionalDetail = [];
@@ -83,14 +99,16 @@ class BookingPriceEstimateService
             }
         }
 
-        $total = $afterDiscount + $additionalTotal;
+        $total = $afterDiscount + $additionalTotal + $pickupCharge + $deliveryCharge;
 
         return [
             'estimated_price' => round($total, 2),
             'breakdown' => [
-                'base_freight' => round($baseFreight, 2),
-                'discount_amount' => round($discountAmount, 2),
-                'additional_services_total' => round($additionalTotal, 2),
+                'freight' => round($baseFreight, 2),
+                'pickup' => round($pickupCharge, 2),
+                'delivery' => round($deliveryCharge, 2),
+                'discount' => round($discountAmount, 2),
+                'additional_services' => round($additionalTotal, 2),
                 'additional_services_detail' => $additionalDetail,
                 'total' => round($total, 2),
             ],
