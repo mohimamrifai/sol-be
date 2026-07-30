@@ -15,18 +15,25 @@ class BookingContainer extends Model
     protected $fillable = [
         'booking_id',
         'container_type_id',
+        'quantity',
         'sequence',
         'container_number',
         'seal_number',
         'gross_weight_kg',
         'volume_cbm',
+        'cargo_description',
+        'remark',
         'equipment_condition',
         'temperature',
         'is_dangerous_goods',
         'dg_class_id',
         'un_number',
+        'packing_group',
+        'proper_shipping_name',
+        'flash_point',
         'msds_file_path',
         'dg_notes',
+        'dg_remark',
     ];
 
     protected function casts(): array
@@ -36,6 +43,7 @@ class BookingContainer extends Model
             'gross_weight_kg' => 'decimal:4',
             'volume_cbm' => 'decimal:4',
             'temperature' => 'decimal:2',
+            'flash_point' => 'decimal:2',
         ];
     }
 

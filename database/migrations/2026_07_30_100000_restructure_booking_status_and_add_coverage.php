@@ -50,12 +50,14 @@ return new class extends Migration
         // Step 2: change the enum (drop confirmed & cancelled).
         // Use raw SQL because Laravel's schema builder cannot drop enum values
         // on most MySQL/MariaDB versions.
-        DB::statement("
-            ALTER TABLE `bookings`
-            MODIFY COLUMN `status`
-            ENUM('draft','submitted','approved','rejected')
-            NOT NULL DEFAULT 'draft'
-        ");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("
+                ALTER TABLE `bookings`
+                MODIFY COLUMN `status`
+                ENUM('draft','submitted','approved','rejected')
+                NOT NULL DEFAULT 'draft'
+            ");
+        }
 
         // Step 3: add new columns.
         Schema::table('bookings', function (Blueprint $table) {
@@ -85,11 +87,13 @@ return new class extends Migration
             ]);
         });
 
-        DB::statement("
-            ALTER TABLE `bookings`
-            MODIFY COLUMN `status`
-            ENUM('draft','submitted','confirmed','approved','rejected','cancelled')
-            NOT NULL DEFAULT 'draft'
-        ");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("
+                ALTER TABLE `bookings`
+                MODIFY COLUMN `status`
+                ENUM('draft','submitted','confirmed','approved','rejected','cancelled')
+                NOT NULL DEFAULT 'draft'
+            ");
+        }
     }
 };

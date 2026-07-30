@@ -51,7 +51,12 @@ class Booking extends Model
         'is_dangerous_goods', 'dg_class_id', 'un_number', 'msds_file',
         'equipment_condition', 'temperature',
         'shipper_name', 'shipper_address', 'shipper_phone',
+        'shipper_branch_id', 'shipper_snapshot',
+        'consignee_type', 'consignee_branch_id', 'consignee_snapshot',
         'consignee_name', 'consignee_address', 'consignee_phone',
+        'pickup_date', 'pickup_time', 'pickup_notes', 'delivery_notes',
+        'container_responsibility',
+        'confirmed_terms_at',
         'estimated_price', 'status',
         'rejection_reason', 'notes',
         'approved_by', 'approved_at',
@@ -61,7 +66,9 @@ class Booking extends Model
     {
         return [
             'departure_date' => 'date',
+            'pickup_date' => 'date',
             'approved_at' => 'datetime',
+            'confirmed_terms_at' => 'datetime',
             'estimated_weight' => 'decimal:2',
             'estimated_cbm' => 'decimal:2',
             'length' => 'decimal:2',
@@ -74,6 +81,8 @@ class Booking extends Model
             'container_count' => 'integer',
             'is_dangerous_goods' => 'boolean',
             'temperature' => 'decimal:2',
+            'shipper_snapshot' => 'array',
+            'consignee_snapshot' => 'array',
         ];
     }
 
@@ -235,20 +244,36 @@ class Booking extends Model
      */
     public function recalculateCargoMetrics(): void
     {
-        $length = (float) ($this->length ?? 0);
-        $width = (float) ($this->width ?? 0);
-        $height = (float) ($this->height ?? 0);
+        $totalVolume = 0.0;
+        $grossWeight = 0.0;
 
-        if ($length > 0 && $width > 0 && $height > 0) {
-            // CBM = (cm * cm * cm) / 1,000,000
-            $this->total_volume_cbm = round(($length * $width * $height) / 1_000_000, 4);
+        $packages = $this->packages()->get(['volume_cbm', 'weight_kg']);
+        if ($packages->isNotEmpty()) {
+            $totalVolume = (float) $packages->sum(fn ($p) => (float) ($p->volume_cbm ?? 0));
+            $grossWeight = (float) $packages->sum(fn ($p) => (float) ($p->weight_kg ?? 0));
         } else {
-            $this->total_volume_cbm = (float) ($this->estimated_cbm ?? 0);
+            $containers = $this->containers()->get(['volume_cbm', 'gross_weight_kg', 'quantity']);
+            if ($containers->isNotEmpty()) {
+                $totalVolume = (float) $containers->sum(
+                    fn ($c) => ((float) ($c->volume_cbm ?? 0)) * ((int) ($c->quantity ?? 1))
+                );
+                $grossWeight = (float) $containers->sum(
+                    fn ($c) => ((float) ($c->gross_weight_kg ?? 0)) * ((int) ($c->quantity ?? 1))
+                );
+            } else {
+                $length = (float) ($this->length ?? 0);
+                $width = (float) ($this->width ?? 0);
+                $height = (float) ($this->height ?? 0);
+
+                $totalVolume = $length > 0 && $width > 0 && $height > 0
+                    ? round(($length * $width * $height) / 1_000_000, 4)
+                    : (float) ($this->estimated_cbm ?? 0);
+                $grossWeight = (float) ($this->estimated_weight ?? 0);
+            }
         }
 
+        $this->total_volume_cbm = round($totalVolume, 4);
         $this->volume_weight_kg = round(((float) $this->total_volume_cbm) * 1000, 4);
-
-        $grossWeight = (float) ($this->estimated_weight ?? 0);
         $this->chargeable_weight_kg = round(max($grossWeight, (float) $this->volume_weight_kg), 4);
     }
 }

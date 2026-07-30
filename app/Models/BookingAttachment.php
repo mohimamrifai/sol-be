@@ -18,6 +18,8 @@ class BookingAttachment extends Model
         'mime_type',
         'file_size',
         'category',
+        'document_type',
+        'remarks',
     ];
 
     public function booking(): BelongsTo

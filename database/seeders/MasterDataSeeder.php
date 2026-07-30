@@ -11,6 +11,7 @@ use App\Models\Train;
 use App\Models\TrainCar;
 use App\Models\TransportMode;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 
 class MasterDataSeeder extends Seeder
 {
@@ -27,10 +28,15 @@ class MasterDataSeeder extends Seeder
 
     private function seedLocations(): void
     {
+        $stationType = DB::getDriverName() === 'sqlite' ? 'port' : 'station';
+
         $rows = [
             ['name' => 'Jakarta', 'code' => 'JKT', 'type' => 'port', 'city' => 'Jakarta', 'province' => 'DKI Jakarta'],
             ['name' => 'Surabaya', 'code' => 'SUB', 'type' => 'port', 'city' => 'Surabaya', 'province' => 'Jawa Timur'],
             ['name' => 'Semarang', 'code' => 'SMG', 'type' => 'port', 'city' => 'Semarang', 'province' => 'Jawa Tengah'],
+            ['name' => 'Jakarta Station', 'code' => 'STN_JKT', 'type' => $stationType, 'city' => 'Jakarta', 'province' => 'DKI Jakarta'],
+            ['name' => 'Surabaya Station', 'code' => 'STN_SUB', 'type' => $stationType, 'city' => 'Surabaya', 'province' => 'Jawa Timur'],
+            ['name' => 'Semarang Station', 'code' => 'STN_SMG', 'type' => $stationType, 'city' => 'Semarang', 'province' => 'Jawa Tengah'],
             ['name' => 'Bandung', 'code' => 'BDG', 'type' => 'city', 'city' => 'Bandung', 'province' => 'Jawa Barat'],
             ['name' => 'Yogyakarta', 'code' => 'YOG', 'type' => 'city', 'city' => 'Yogyakarta', 'province' => 'DI Yogyakarta'],
             ['name' => 'Medan', 'code' => 'MES', 'type' => 'port', 'city' => 'Medan', 'province' => 'Sumatera Utara'],

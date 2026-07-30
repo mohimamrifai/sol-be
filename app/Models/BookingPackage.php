@@ -23,11 +23,16 @@ class BookingPackage extends Model
         'volume_cbm',
         'piece_count',
         'package_type',
+        'remark',
         'is_dangerous_goods',
         'dg_class_id',
         'un_number',
+        'packing_group',
+        'proper_shipping_name',
+        'flash_point',
         'msds_file_path',
         'dg_notes',
+        'dg_remark',
     ];
 
     protected function casts(): array
@@ -39,6 +44,7 @@ class BookingPackage extends Model
             'height' => 'decimal:2',
             'weight_kg' => 'decimal:4',
             'volume_cbm' => 'decimal:4',
+            'flash_point' => 'decimal:2',
         ];
     }
 

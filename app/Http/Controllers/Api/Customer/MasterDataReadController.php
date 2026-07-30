@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Customer;
 
+use App\Models\Booking;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -93,6 +94,16 @@ class MasterDataReadController extends Controller
             ->where('is_active', true)
             ->orderBy('name')
             ->get();
+
+        return response()->json(['data' => $data]);
+    }
+
+    public function shipmentCoverages(): JsonResponse
+    {
+        $data = array_map(
+            fn (string $value): array => ['value' => $value],
+            Booking::SHIPMENT_COVERAGES
+        );
 
         return response()->json(['data' => $data]);
     }

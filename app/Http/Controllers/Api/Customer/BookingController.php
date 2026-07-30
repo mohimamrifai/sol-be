@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Customer;
 
 use App\Http\Controllers\Controller;
+use App\Models\Branch;
 use App\Models\Booking;
 use App\Models\BookingAttachment;
 use App\Models\Invoice;
@@ -148,6 +149,15 @@ class BookingController extends Controller
 
         $isDraft = filter_var($request->input('is_draft', false), FILTER_VALIDATE_BOOLEAN);
 
+        foreach (['additional_services', 'packages', 'containers', 'shipper_snapshot', 'consignee_snapshot', 'attachments_meta'] as $key) {
+            if (is_string($request->input($key))) {
+                $decoded = json_decode($request->input($key), true);
+                if (is_array($decoded)) {
+                    $request->merge([$key => $decoded]);
+                }
+            }
+        }
+
         $data = $request->validate([
             'is_draft' => 'nullable|boolean',
 
@@ -158,6 +168,7 @@ class BookingController extends Controller
             'shipment_coverage' => 'nullable|in:port_to_port,door_to_port,port_to_door,door_to_door',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:0',
+            'container_responsibility' => 'nullable|in:SOC,COC',
             'estimated_weight' => 'nullable|numeric|min:0',
             'estimated_cbm' => 'nullable|numeric|min:0',
             'length' => 'nullable|numeric|min:0',
@@ -180,14 +191,42 @@ class BookingController extends Controller
             'departure_date' => 'nullable|date|after_or_equal:today',
 
             // Snapshot shipper & consignee (spec L7)
-            'shipper_name' => 'required|string|max:255',
-            'shipper_address' => 'required|string',
-            'shipper_phone' => 'required|string|max:50',
-            'consignee_name' => 'required|string|max:255',
-            'consignee_address' => 'required|string',
-            'consignee_phone' => 'required|string|max:50',
+            'shipper_name' => $isDraft ? 'nullable|string|max:255' : 'required|string|max:255',
+            'shipper_address' => $isDraft ? 'nullable|string' : 'required|string',
+            'shipper_phone' => $isDraft ? 'nullable|string|max:50' : 'required|string|max:50',
+            'shipper_branch_id' => [
+                $isDraft ? 'nullable' : 'required',
+                'integer',
+                'exists:branches,id',
+                function ($attribute, $value, $fail) use ($user) {
+                    if ($value && Branch::where('id', $value)->where('company_id', $user->company_id)->doesntExist()) {
+                        $fail('Customer Location tidak ditemukan.');
+                    }
+                },
+            ],
+            'shipper_snapshot' => 'nullable|array',
+            'consignee_name' => $isDraft ? 'nullable|string|max:255' : 'required|string|max:255',
+            'consignee_address' => $isDraft ? 'nullable|string' : 'required|string',
+            'consignee_phone' => $isDraft ? 'nullable|string|max:50' : 'required|string|max:50',
+            'consignee_type' => $isDraft ? 'nullable|in:customer_location,external' : 'required|in:customer_location,external',
+            'consignee_branch_id' => [
+                'nullable',
+                'integer',
+                'exists:branches,id',
+                function ($attribute, $value, $fail) use ($user) {
+                    if ($value && Branch::where('id', $value)->where('company_id', $user->company_id)->doesntExist()) {
+                        $fail('Customer Location tidak ditemukan.');
+                    }
+                },
+            ],
+            'consignee_snapshot' => 'nullable|array',
 
             'notes' => 'nullable|string',
+            'pickup_date' => 'nullable|date',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'pickup_notes' => 'nullable|string',
+            'delivery_notes' => 'nullable|string',
+            'confirm_booking' => $isDraft ? 'nullable|boolean' : 'required|accepted',
             'additional_services' => 'nullable',
 
             'is_dangerous_goods' => 'nullable|boolean',
@@ -215,35 +254,162 @@ class BookingController extends Controller
             'packages.*.weight_kg' => 'nullable|numeric|min:0',
             'packages.*.piece_count' => 'nullable|integer|min:1',
             'packages.*.package_type' => 'nullable|string|max:80',
+            'packages.*.remark' => 'nullable|string',
             'packages.*.is_dangerous_goods' => 'nullable|boolean',
             'packages.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'packages.*.un_number' => 'nullable|string|max:50',
-            'packages.*.msds_file' => 'nullable|file|mimes:pdf|max:5120',
+            'packages.*.packing_group' => 'nullable|string|max:10',
+            'packages.*.proper_shipping_name' => 'nullable|string|max:255',
+            'packages.*.flash_point' => 'nullable|numeric',
             'packages.*.dg_notes' => 'nullable|string',
+            'packages.*.dg_remark' => 'nullable|string',
+            'packages_msds_files' => 'nullable|array',
+            'packages_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
 
             'containers' => 'nullable|array',
             'containers.*.container_type_id' => 'nullable|exists:container_types,id',
+            'containers.*.quantity' => 'nullable|integer|min:1',
             'containers.*.container_number' => 'nullable|string|max:20',
             'containers.*.seal_number' => 'nullable|string|max:50',
             'containers.*.gross_weight_kg' => 'nullable|numeric|min:0',
             'containers.*.volume_cbm' => 'nullable|numeric|min:0',
+            'containers.*.cargo_description' => 'nullable|string|max:500',
+            'containers.*.remark' => 'nullable|string',
             'containers.*.equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'containers.*.temperature' => 'nullable|numeric',
             'containers.*.is_dangerous_goods' => 'nullable|boolean',
             'containers.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'containers.*.un_number' => 'nullable|string|max:50',
-            'containers.*.msds_file' => 'nullable|file|mimes:pdf|max:5120',
+            'containers.*.packing_group' => 'nullable|string|max:10',
+            'containers.*.proper_shipping_name' => 'nullable|string|max:255',
+            'containers.*.flash_point' => 'nullable|numeric',
             'containers.*.dg_notes' => 'nullable|string',
+            'containers.*.dg_remark' => 'nullable|string',
+            'containers_msds_files' => 'nullable|array',
+            'containers_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
 
             'attachments' => 'nullable|array',
-            'attachments.*' => 'file|max:10240',
+            'attachments.*' => 'file|mimes:pdf,jpg,jpeg,png,xlsx|max:10240',
+            'attachments_meta' => 'nullable',
         ]);
 
-        if (is_string($request->additional_services)) {
-            $data['additional_services'] = json_decode($request->additional_services, true);
+        if (! $isDraft) {
+            $errors = [];
+
+            $coverage = $data['shipment_coverage'] ?? null;
+            if (in_array($coverage, ['door_to_port', 'door_to_door'], true)) {
+                if (empty($data['pickup_date'])) {
+                    $errors['pickup_date'][] = 'Preferred Pickup Date wajib diisi.';
+                }
+                if (empty($data['pickup_time'])) {
+                    $errors['pickup_time'][] = 'Preferred Pickup Time wajib diisi.';
+                }
+            }
+
+            if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_branch_id'])) {
+                $errors['consignee_branch_id'][] = 'Customer Location wajib dipilih.';
+            }
+
+            $serviceType = \App\Models\ServiceType::find($data['service_type_id']);
+            $serviceCode = $serviceType?->code;
+            if ($serviceCode === 'LCL') {
+                if (empty($data['packages']) || ! is_array($data['packages'])) {
+                    $errors['packages'][] = 'Package detail wajib diisi untuk service type LCL.';
+                }
+            }
+            if ($serviceCode === 'FCL') {
+                if (empty($data['containers']) || ! is_array($data['containers'])) {
+                    $errors['containers'][] = 'Container detail wajib diisi untuk service type FCL.';
+                }
+                if (empty($data['container_responsibility'])) {
+                    $errors['container_responsibility'][] = 'Container Responsibility wajib dipilih.';
+                }
+            }
+
+            if (! empty($data['packages']) && is_array($data['packages'])) {
+                foreach ($data['packages'] as $i => $pkg) {
+                    if (empty($pkg['description'])) {
+                        $errors["packages.$i.description"][] = 'Package Description wajib diisi.';
+                    }
+                    if (empty($pkg['piece_count'])) {
+                        $errors["packages.$i.piece_count"][] = 'Quantity wajib diisi.';
+                    }
+                    if (! empty($pkg['is_dangerous_goods'])) {
+                        if (empty($pkg['dg_class_id'])) {
+                            $errors["packages.$i.dg_class_id"][] = 'DG Class wajib diisi.';
+                        }
+                        if (empty($pkg['un_number'])) {
+                            $errors["packages.$i.un_number"][] = 'UN Number wajib diisi.';
+                        }
+                        if (empty($pkg['packing_group'])) {
+                            $errors["packages.$i.packing_group"][] = 'Packing Group wajib diisi.';
+                        }
+                        if (empty($pkg['proper_shipping_name'])) {
+                            $errors["packages.$i.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
+                        }
+                        if (! $request->file("packages_msds_files.$i")) {
+                            $errors["packages_msds_files.$i"][] = 'MSDS / SDS wajib diunggah.';
+                        }
+                    }
+                }
+            }
+
+            if (! empty($data['containers']) && is_array($data['containers'])) {
+                foreach ($data['containers'] as $i => $ctr) {
+                    if (empty($ctr['container_type_id'])) {
+                        $errors["containers.$i.container_type_id"][] = 'Container Type wajib diisi.';
+                    }
+                    if (empty($ctr['quantity'])) {
+                        $errors["containers.$i.quantity"][] = 'Quantity wajib diisi.';
+                    }
+                    if (empty($ctr['cargo_description'])) {
+                        $errors["containers.$i.cargo_description"][] = 'Cargo Description wajib diisi.';
+                    }
+                    if (! empty($ctr['is_dangerous_goods'])) {
+                        if (empty($ctr['dg_class_id'])) {
+                            $errors["containers.$i.dg_class_id"][] = 'DG Class wajib diisi.';
+                        }
+                        if (empty($ctr['un_number'])) {
+                            $errors["containers.$i.un_number"][] = 'UN Number wajib diisi.';
+                        }
+                        if (empty($ctr['packing_group'])) {
+                            $errors["containers.$i.packing_group"][] = 'Packing Group wajib diisi.';
+                        }
+                        if (empty($ctr['proper_shipping_name'])) {
+                            $errors["containers.$i.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
+                        }
+                        if (! $request->file("containers_msds_files.$i")) {
+                            $errors["containers_msds_files.$i"][] = 'MSDS / SDS wajib diunggah.';
+                        }
+                    }
+                }
+            }
+
+            if (! empty($errors)) {
+                return response()->json([
+                    'message' => 'The given data was invalid.',
+                    'errors' => $errors,
+                ], 422);
+            }
         }
 
         return DB::transaction(function () use ($request, $user, $data, $isDraft) {
+            unset($data['confirm_booking']);
+            $data['confirmed_terms_at'] = $isDraft ? null : now();
+
+            if (! empty($data['shipper_snapshot']) && is_array($data['shipper_snapshot'])) {
+                $shipperCompany = $data['shipper_snapshot']['company'] ?? null;
+                if (is_string($shipperCompany) && $shipperCompany !== '') {
+                    $data['shipper_name'] = $shipperCompany;
+                }
+            }
+            if (! empty($data['consignee_snapshot']) && is_array($data['consignee_snapshot'])) {
+                $consigneeCompany = $data['consignee_snapshot']['company'] ?? null;
+                if (is_string($consigneeCompany) && $consigneeCompany !== '') {
+                    $data['consignee_name'] = $consigneeCompany;
+                }
+            }
+
             $estimate = null;
             if (! $isDraft) {
                 $estimateParams = [
@@ -298,7 +464,7 @@ class BookingController extends Controller
             if (! empty($data['packages'])) {
                 $sequence = 1;
                 foreach ($data['packages'] as $i => $pkg) {
-                    $msdsItem = $request->file("packages.{$i}.msds_file");
+                    $msdsItem = $request->file("packages_msds_files.$i");
                     $pkgMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
                     $booking->packages()->create([
                         'sequence' => $sequence++,
@@ -310,11 +476,16 @@ class BookingController extends Controller
                         'volume_cbm' => $this->calcPackageCbm($pkg),
                         'piece_count' => $pkg['piece_count'] ?? 1,
                         'package_type' => $pkg['package_type'] ?? null,
+                        'remark' => $pkg['remark'] ?? null,
                         'is_dangerous_goods' => $pkg['is_dangerous_goods'] ?? false,
                         'dg_class_id' => $pkg['dg_class_id'] ?? null,
                         'un_number' => $pkg['un_number'] ?? null,
+                        'packing_group' => $pkg['packing_group'] ?? null,
+                        'proper_shipping_name' => $pkg['proper_shipping_name'] ?? null,
+                        'flash_point' => $pkg['flash_point'] ?? null,
                         'msds_file_path' => $pkgMsds,
                         'dg_notes' => $pkg['dg_notes'] ?? null,
+                        'dg_remark' => $pkg['dg_remark'] ?? null,
                     ]);
                 }
             }
@@ -323,30 +494,39 @@ class BookingController extends Controller
             if (! empty($data['containers'])) {
                 $sequence = 1;
                 foreach ($data['containers'] as $i => $ctr) {
-                    $msdsItem = $request->file("containers.{$i}.msds_file");
+                    $msdsItem = $request->file("containers_msds_files.$i");
                     $ctrMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
                     $booking->containers()->create([
                         'sequence' => $sequence++,
                         'container_type_id' => $ctr['container_type_id'] ?? null,
+                        'quantity' => $ctr['quantity'] ?? 1,
                         'container_number' => $ctr['container_number'] ?? null,
                         'seal_number' => $ctr['seal_number'] ?? null,
                         'gross_weight_kg' => $ctr['gross_weight_kg'] ?? null,
                         'volume_cbm' => $ctr['volume_cbm'] ?? null,
+                        'cargo_description' => $ctr['cargo_description'] ?? null,
+                        'remark' => $ctr['remark'] ?? null,
                         'equipment_condition' => $ctr['equipment_condition'] ?? null,
                         'temperature' => $ctr['temperature'] ?? null,
                         'is_dangerous_goods' => $ctr['is_dangerous_goods'] ?? false,
                         'dg_class_id' => $ctr['dg_class_id'] ?? null,
                         'un_number' => $ctr['un_number'] ?? null,
+                        'packing_group' => $ctr['packing_group'] ?? null,
+                        'proper_shipping_name' => $ctr['proper_shipping_name'] ?? null,
+                        'flash_point' => $ctr['flash_point'] ?? null,
                         'msds_file_path' => $ctrMsds,
                         'dg_notes' => $ctr['dg_notes'] ?? null,
+                        'dg_remark' => $ctr['dg_remark'] ?? null,
                     ]);
                 }
             }
 
             // Generic attachments
             if (! empty($data['attachments'])) {
-                foreach ($request->file('attachments') as $file) {
+                $meta = is_array($data['attachments_meta'] ?? null) ? $data['attachments_meta'] : [];
+                foreach ($request->file('attachments') as $i => $file) {
                     $path = $file->store('booking_attachments', 'public');
+                    $rowMeta = is_array($meta[$i] ?? null) ? $meta[$i] : [];
                     $booking->attachments()->create([
                         'uploaded_by' => $user->id,
                         'file_path' => $path,
@@ -354,6 +534,8 @@ class BookingController extends Controller
                         'mime_type' => $file->getMimeType(),
                         'file_size' => $file->getSize(),
                         'category' => 'general',
+                        'document_type' => $rowMeta['document_type'] ?? null,
+                        'remarks' => $rowMeta['remarks'] ?? null,
                     ]);
                 }
             }
@@ -728,7 +910,7 @@ class BookingController extends Controller
         }
 
         $data = $request->validate([
-            'file' => 'required|file|max:10240',
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png,xlsx|max:10240',
             'category' => 'nullable|string|max:50',
         ]);
 
@@ -808,9 +990,10 @@ class BookingController extends Controller
         $l = (float) ($pkg['length'] ?? 0);
         $w = (float) ($pkg['width'] ?? 0);
         $h = (float) ($pkg['height'] ?? 0);
+        $qty = (int) ($pkg['piece_count'] ?? 1);
 
         return $l > 0 && $w > 0 && $h > 0
-            ? round(($l * $w * $h) / 1_000_000, 4)
+            ? round((($l * $w * $h) / 1_000_000) * max($qty, 1), 4)
             : null;
     }
 

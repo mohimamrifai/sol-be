@@ -43,7 +43,9 @@ return new class extends Migration
         // business_entity_type is stored as varchar in the original migration.
         // We widen it to accommodate new values like 'Perorangan' and 'Lainnya'.
         // (Lainnya is a UI sentinel — the free text lives in business_entity_other.)
+        if (DB::getDriverName() !== 'sqlite') {
         DB::statement("ALTER TABLE companies MODIFY COLUMN business_entity_type VARCHAR(30) NULL");
+        }
     }
 
     public function down(): void
@@ -58,6 +60,8 @@ return new class extends Migration
             ]);
         });
 
-        DB::statement("ALTER TABLE companies MODIFY COLUMN business_entity_type ENUM('PT','CV','UD','Koperasi','Yayasan','Firma') NULL");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE companies MODIFY COLUMN business_entity_type ENUM('PT','CV','UD','Koperasi','Yayasan','Firma') NULL");
+        }
     }
 };

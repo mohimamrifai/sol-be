@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Admin\ShipmentController as AdminShipmentController
 use App\Http\Controllers\Api\Admin\UserController;
 use App\Http\Controllers\Api\Admin\VendorController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\Customer\BranchController as CustomerBranchController;
 use App\Http\Controllers\Api\Customer\BookingController as CustomerBookingController;
 use App\Http\Controllers\Api\Customer\CompanyController as CustomerCompanyController;
 use App\Http\Controllers\Api\Customer\DashboardController as CustomerDashboardController;
@@ -56,6 +57,7 @@ Route::prefix('public')->group(function () {
     Route::get('master/cargo-categories', [MasterDataReadController::class, 'cargoCategories']);
     Route::get('master/dg-classes', [MasterDataReadController::class, 'dgClasses']);
     Route::get('master/additional-charges', [MasterDataReadController::class, 'additionalCharges']);
+    Route::get('master/shipment-coverages', [MasterDataReadController::class, 'shipmentCoverages']);
 
     // Registration form metadata (dropdown options that live in code, not DB)
     Route::get('master/business-entity-types', [MasterMetadataController::class, 'businessEntityTypes']);
@@ -237,6 +239,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('master/cargo-categories', [MasterDataReadController::class, 'cargoCategories']);
         Route::get('master/dg-classes', [MasterDataReadController::class, 'dgClasses']);
         Route::get('master/additional-charges', [MasterDataReadController::class, 'additionalCharges']);
+        Route::get('master/shipment-coverages', [MasterDataReadController::class, 'shipmentCoverages']);
+
+        Route::get('branches', [CustomerBranchController::class, 'index']);
 
         // Booking
         Route::post('bookings/estimate-price', [CustomerBookingController::class, 'estimatePrice']);

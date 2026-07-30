@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Booking;
 use App\Services\BookingPriceEstimateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 /**
  * Estimasi harga booking untuk pengunjung (tanpa login).
@@ -24,6 +26,10 @@ class PublicBookingEstimateController extends Controller
             'destination_location_id' => 'required|exists:locations,id',
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'service_type_id' => 'required|exists:service_types,id',
+            'shipment_coverage' => ['nullable', Rule::in(Booking::SHIPMENT_COVERAGES)],
+            'pickup_date' => 'nullable|date',
+            'pickup_time' => 'nullable|date_format:H:i',
+            'pickup_notes' => 'nullable|string|max:2000',
             'cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:1',
