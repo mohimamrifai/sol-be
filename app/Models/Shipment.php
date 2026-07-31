@@ -4,25 +4,53 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Shipment extends Model
 {
     use HasFactory, SoftDeletes;
 
+    /**
+     * Customer-facing status buckets (prompt.md L21-26).
+     * Mapped from the 11 operational statuses in config/shipment.php.
+     */
+    public const HL_PLANNING = 'planning';
+
+    public const HL_IN_PROGRESS = 'in_progress';
+
+    public const HL_COMPLETED = 'completed';
+
+    public const HL_CANCELLED = 'cancelled';
+
+    public const HIGH_LEVEL_STATUSES = [
+        self::HL_PLANNING,
+        self::HL_IN_PROGRESS,
+        self::HL_COMPLETED,
+        self::HL_CANCELLED,
+    ];
+
+    private const PLANNING_STATUSES = ['created', 'booking_created', 'survey_completed'];
+
+    private const IN_PROGRESS_STATUSES = [
+        'cargo_received', 'stuffing_container', 'container_sealed',
+        'departed', 'train_departed', 'arrived', 'train_arrived',
+        'unloading', 'container_unloading', 'ready_for_pickup',
+    ];
+
     protected $fillable = [
-        'shipment_number', 'waybill_number', 'booking_id',
+        'shipment_no', 'shipment_number', 'waybill_number', 'booking_id',
         'company_id', 'origin_location_id', 'destination_location_id',
         'transport_mode_id', 'service_type_id', 'cargo_category_id',
-        'status',
+        'shipment_coverage', 'status',
         'estimated_departure', 'estimated_arrival',
         'actual_departure', 'actual_arrival',
         'is_dangerous_goods', 'dg_class_id', 'un_number', 'msds_file',
         'equipment_condition', 'temperature',
-        'notes', 'created_by',
+        'notes', 'cancelled_reason', 'created_by',
+        'shipper_snapshot', 'consignee_snapshot',
     ];
 
     protected function casts(): array
@@ -34,20 +62,61 @@ class Shipment extends Model
             'actual_arrival' => 'date',
             'is_dangerous_goods' => 'boolean',
             'temperature' => 'decimal:2',
+            'shipper_snapshot' => 'array',
+            'consignee_snapshot' => 'array',
         ];
     }
+
+    protected $appends = ['display_number', 'high_level_status'];
 
     // ── Auto-generate shipment & waybill numbers ──
     protected static function booted(): void
     {
         static::creating(function (Shipment $shipment) {
+            if (empty($shipment->shipment_no)) {
+                $shipment->shipment_no = (int) (self::max('shipment_no') ?? 0) + 1;
+            }
             if (empty($shipment->shipment_number)) {
-                $shipment->shipment_number = 'SH-' . now()->format('Ymd') . '-' . strtoupper(substr(uniqid(), -5));
+                $shipment->shipment_number = self::formatShipmentNo((int) $shipment->shipment_no);
             }
             if (empty($shipment->waybill_number)) {
-                $shipment->waybill_number = 'CN-' . now()->format('Ymd') . '-' . strtoupper(substr(uniqid(), -5));
+                $shipment->waybill_number = 'CN-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
             }
         });
+    }
+
+    public static function formatShipmentNo(int $n): string
+    {
+        return 'SHP'.str_pad((string) $n, 6, '0', STR_PAD_LEFT);
+    }
+
+    public function getDisplayNumberAttribute(): string
+    {
+        return self::formatShipmentNo((int) ($this->shipment_no ?? 0));
+    }
+
+    /**
+     * Map the operational status to one of 4 customer buckets.
+     */
+    public function getHighLevelStatusAttribute(): string
+    {
+        $raw = (string) ($this->status ?? '');
+        $key = strtolower(trim($raw));
+
+        if ($key === self::HL_CANCELLED) {
+            return self::HL_CANCELLED;
+        }
+        if ($key === self::HL_COMPLETED) {
+            return self::HL_COMPLETED;
+        }
+        if (in_array($key, self::PLANNING_STATUSES, true)) {
+            return self::HL_PLANNING;
+        }
+        if (in_array($key, self::IN_PROGRESS_STATUSES, true)) {
+            return self::HL_IN_PROGRESS;
+        }
+
+        return self::HL_PLANNING;
     }
 
     // ── Relationships ──

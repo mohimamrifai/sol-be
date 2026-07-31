@@ -258,6 +258,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('bookings/{booking}/attachments/{attachment}', [CustomerBookingController::class, 'deleteAttachment']);
 
         // Shipment
+        Route::get('shipments/stats', [CustomerShipmentController::class, 'stats']);
         Route::get('shipments', [CustomerShipmentController::class, 'index']);
         Route::get('shipments/{shipment}', [CustomerShipmentController::class, 'show']);
         Route::get('shipments/{shipment}/consignment-note-pdf', [CustomerShipmentController::class, 'downloadConsignmentNotePdf']);

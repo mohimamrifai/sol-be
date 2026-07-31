@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
+use App\Models\CargoCategory;
 use App\Models\Shipment;
 use App\Services\BookingPriceEstimateService;
 use Illuminate\Http\JsonResponse;
@@ -240,11 +241,11 @@ class BookingController extends Controller
             'cargo_description' => [
                 'nullable', 'string', 'max:2000',
                 function ($attribute, $value, $fail) use ($request) {
-                    $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
+                    $cat = CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->code === 'MIX' && empty($value)) {
                         $fail('Deskripsi barang wajib diisi untuk kategori Mixed Cargo.');
                     }
-                }
+                },
             ],
             'shipper_name' => 'required|string|max:255',
             'shipper_address' => 'required|string',
@@ -265,11 +266,11 @@ class BookingController extends Controller
             'temperature' => [
                 'nullable', 'numeric',
                 function ($attribute, $value, $fail) use ($request) {
-                    $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
+                    $cat = CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->requires_temperature && $value === null) {
                         $fail('Suhu (temperature) wajib diisi untuk kategori kargo ini.');
                     }
-                }
+                },
             ],
         ]);
 
@@ -342,6 +343,7 @@ class BookingController extends Controller
                 'destination_location_id' => $booking->destination_location_id,
                 'transport_mode_id' => $booking->transport_mode_id,
                 'service_type_id' => $booking->service_type_id,
+                'shipment_coverage' => $booking->shipment_coverage,
                 'status' => 'created',
                 'created_by' => $request->user()->id,
                 'cargo_category_id' => $booking->cargo_category_id,
@@ -351,6 +353,8 @@ class BookingController extends Controller
                 'msds_file' => $booking->msds_file,
                 'equipment_condition' => $booking->equipment_condition,
                 'temperature' => $booking->temperature,
+                'shipper_snapshot' => $this->buildShipperSnapshot($booking),
+                'consignee_snapshot' => $this->buildConsigneeSnapshot($booking),
             ]);
 
             $shipment->trackings()->create([
@@ -410,6 +414,7 @@ class BookingController extends Controller
             'destination_location_id' => $booking->destination_location_id,
             'transport_mode_id' => $booking->transport_mode_id,
             'service_type_id' => $booking->service_type_id,
+            'shipment_coverage' => $booking->shipment_coverage,
             'status' => 'created',
             'created_by' => $request->user()->id,
 
@@ -421,9 +426,10 @@ class BookingController extends Controller
             'msds_file' => $booking->msds_file,
             'equipment_condition' => $booking->equipment_condition,
             'temperature' => $booking->temperature,
+            'shipper_snapshot' => $this->buildShipperSnapshot($booking),
+            'consignee_snapshot' => $this->buildConsigneeSnapshot($booking),
         ]);
 
-        // Buat tracking awal
         $shipment->trackings()->create([
             'status' => 'created',
             'notes' => 'Shipment dibuat dari booking '.$booking->booking_number,
@@ -435,5 +441,28 @@ class BookingController extends Controller
             'message' => 'Shipment berhasil dibuat dari booking.',
             'data' => $shipment->load(['booking', 'trackings']),
         ], 201);
+    }
+
+    private function buildShipperSnapshot(Booking $booking): array
+    {
+        return [
+            'name' => $booking->shipper_name,
+            'phone' => $booking->shipper_phone,
+            'address' => $booking->shipper_address,
+            'branch_id' => $booking->shipper_branch_id,
+            'snapshot' => $booking->shipper_snapshot,
+        ];
+    }
+
+    private function buildConsigneeSnapshot(Booking $booking): array
+    {
+        return [
+            'name' => $booking->consignee_name,
+            'phone' => $booking->consignee_phone,
+            'address' => $booking->consignee_address,
+            'type' => $booking->consignee_type,
+            'branch_id' => $booking->consignee_branch_id,
+            'snapshot' => $booking->consignee_snapshot,
+        ];
     }
 }
