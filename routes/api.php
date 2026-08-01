@@ -12,10 +12,11 @@ use App\Http\Controllers\Api\Admin\ShipmentController as AdminShipmentController
 use App\Http\Controllers\Api\Admin\UserController;
 use App\Http\Controllers\Api\Admin\VendorController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\Customer\BranchController as CustomerBranchController;
 use App\Http\Controllers\Api\Customer\BookingController as CustomerBookingController;
+use App\Http\Controllers\Api\Customer\BranchController as CustomerBranchController;
 use App\Http\Controllers\Api\Customer\CompanyController as CustomerCompanyController;
 use App\Http\Controllers\Api\Customer\DashboardController as CustomerDashboardController;
+use App\Http\Controllers\Api\Customer\DocumentController as CustomerDocumentController;
 use App\Http\Controllers\Api\Customer\InvoiceController as CustomerInvoiceController;
 use App\Http\Controllers\Api\Customer\MasterDataReadController;
 use App\Http\Controllers\Api\Customer\PaymentController as CustomerPaymentController;
@@ -271,6 +272,14 @@ Route::middleware('auth:sanctum')->group(function () {
         // Payment
         Route::get('payments', [CustomerPaymentController::class, 'index']);
         Route::post('invoices/{invoice}/pay', [CustomerPaymentController::class, 'pay']);
+
+        // Documents (virtual aggregation across booking, shipment, billing)
+        Route::get('documents/stats', [CustomerDocumentController::class, 'stats']);
+        Route::get('documents/shipment-options', [CustomerDocumentController::class, 'shipmentOptions']);
+        Route::get('documents', [CustomerDocumentController::class, 'index']);
+        Route::get('documents/{id}', [CustomerDocumentController::class, 'show']);
+        Route::get('documents/{id}/preview', [CustomerDocumentController::class, 'preview']);
+        Route::get('documents/{id}/download', [CustomerDocumentController::class, 'download']);
 
         // Company Settings
         Route::get('company', [CustomerCompanyController::class, 'show']);

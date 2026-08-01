@@ -34,7 +34,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'manage_vendors', 'manage_pricing', 'manage_discounts',
             // Reporting & ops
             'view_reports', 'export_reports', 'view_dashboard', 'view_analytics',
-            'manage_branches', 'manage_documents', 'manage_notifications',
+            'manage_branches', 'manage_documents', 'view_documents', 'manage_notifications',
             'view_audit_log', 'view_vendors', 'view_pricing', 'edit_pricing',
             'view_containers', 'edit_containers', 'manage_tracking_photos',
         ];
@@ -72,18 +72,18 @@ class RolesAndPermissionsSeeder extends Seeder
         $companyAdmin = Role::firstOrCreate(['name' => 'company_admin', 'guard_name' => 'web']);
         $companyAdmin->givePermissionTo([
             'view_bookings', 'create_bookings',
-            'view_shipments', 'view_invoices', 'view_payments',
+            'view_shipments', 'view_invoices', 'view_payments', 'view_documents',
             'view_users', 'create_users', 'edit_users',
         ]);
 
         $opsPic = Role::firstOrCreate(['name' => 'ops_pic', 'guard_name' => 'web']);
         $opsPic->givePermissionTo([
-            'view_bookings', 'create_bookings', 'view_shipments',
+            'view_bookings', 'create_bookings', 'view_shipments', 'view_documents',
         ]);
 
         $financePic = Role::firstOrCreate(['name' => 'finance_pic', 'guard_name' => 'web']);
         $financePic->givePermissionTo([
-            'view_bookings', 'view_shipments', 'view_invoices', 'view_payments',
+            'view_bookings', 'view_shipments', 'view_invoices', 'view_payments', 'view_documents',
         ]);
 
         // ── Super Admin User (login dev: admin@sol.com / password) ──
