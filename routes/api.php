@@ -266,6 +266,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('shipments/{shipment}/waybill-pdf', [CustomerShipmentController::class, 'downloadWaybillPdf']);
 
         // Invoice
+        Route::get('invoices/stats', [CustomerInvoiceController::class, 'stats']);
         Route::get('invoices', [CustomerInvoiceController::class, 'index']);
         Route::get('invoices/{invoice}', [CustomerInvoiceController::class, 'show']);
         Route::get('invoices/{invoice}/pdf', [CustomerInvoiceController::class, 'downloadPdf']);

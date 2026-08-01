@@ -64,6 +64,10 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Invoice ini sudah dibatalkan.'], 422);
         }
 
+        if ($invoice->status === 'draft') {
+            return response()->json(['message' => 'Invoice ini belum diterbitkan.'], 422);
+        }
+
         $invoice->load('company');
         $company = $invoice->company;
 
@@ -75,7 +79,12 @@ class PaymentController extends Controller
         ];
 
         try {
-            $result = $midtrans->createSnapTransaction($invoice, $customerDetails);
+            $outstanding = $invoice->outstandingAmount();
+            if ($outstanding <= 0) {
+                return response()->json(['message' => 'Invoice ini sudah lunas.'], 422);
+            }
+
+            $result = $midtrans->createSnapTransaction($invoice, $customerDetails, $outstanding);
         } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Gagal membuat link pembayaran Midtrans.',
@@ -136,12 +145,6 @@ class PaymentController extends Controller
             ], 422);
         }
 
-        if ($invoice->payments()->where('status', 'success')->where('id', '!=', $payment->id)->exists()) {
-            return response()->json([
-                'message' => 'Invoice sudah lunas melalui pembayaran lain.',
-            ], 422);
-        }
-
         if ($payment->status === 'success') {
             $payment->load(['invoice.company', 'invoice.shipment']);
 
@@ -163,11 +166,11 @@ class PaymentController extends Controller
             ]),
         ]);
 
-        $payment->invoice->markAsPaid();
+        $payment->invoice->syncStatusFromPayments();
         $payment->load(['invoice.company', 'invoice.shipment']);
 
         return response()->json([
-            'message' => 'Pembayaran diverifikasi manual; invoice ditandai lunas.',
+            'message' => 'Pembayaran diverifikasi manual.',
             'data' => $payment,
         ]);
     }
@@ -178,7 +181,9 @@ class PaymentController extends Controller
     public function overdueInvoices(Request $request): JsonResponse
     {
         $query = Invoice::with(['company:id,name', 'shipment:id,waybill_number'])
-            ->where('status', 'overdue');
+            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereNotNull('due_date')
+            ->where('due_date', '<', now()->toDateString());
 
         if ($request->filled('company_id')) {
             $query->where('company_id', $request->company_id);

@@ -58,6 +58,10 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Invoice ini sudah dibayar.'], 422);
         }
 
+        if ($invoice->status === 'draft') {
+            return response()->json(['message' => 'Invoice ini belum diterbitkan.'], 422);
+        }
+
         $customerDetails = $request->validate([
             'first_name' => 'nullable|string|max:255',
             'last_name' => 'nullable|string|max:255',
@@ -77,7 +81,12 @@ class PaymentController extends Controller
         }
 
         try {
-            $result = $this->midtransService->createSnapTransaction($invoice, $customerDetails);
+            $outstanding = $invoice->outstandingAmount();
+            if ($outstanding <= 0) {
+                return response()->json(['message' => 'Invoice ini sudah lunas.'], 422);
+            }
+
+            $result = $this->midtransService->createSnapTransaction($invoice, $customerDetails, $outstanding);
         } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Gagal membuat transaksi pembayaran.',

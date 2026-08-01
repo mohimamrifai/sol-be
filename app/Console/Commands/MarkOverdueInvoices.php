@@ -9,16 +9,11 @@ class MarkOverdueInvoices extends Command
 {
     protected $signature = 'invoices:mark-overdue';
 
-    protected $description = 'Update invoice status to overdue when due_date has passed and status is unpaid';
+    protected $description = 'Legacy no-op. Overdue status is computed dynamically for customer-facing views.';
 
     public function handle(): int
     {
-        $count = Invoice::query()
-            ->where('status', 'unpaid')
-            ->whereDate('due_date', '<', now()->toDateString())
-            ->update(['status' => 'overdue']);
-
-        $this->info("Marked {$count} invoice(s) as overdue.");
+        $this->info('No-op: overdue invoices are derived at query-time.');
 
         return self::SUCCESS;
     }

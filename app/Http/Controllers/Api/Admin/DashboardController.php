@@ -25,15 +25,18 @@ class DashboardController extends Controller
 
         $activeShipments = Shipment::whereNotIn('status', ['completed', 'cancelled'])->count();
 
-        $overdueInvoices = Invoice::where('status', 'overdue')->count();
+        $overdueInvoices = Invoice::whereIn('status', ['issued', 'partially_paid'])
+            ->whereNotNull('due_date')
+            ->where('due_date', '<', $today)
+            ->count();
 
         $activeCompanies = Company::where('status', 'active')->count();
 
         $pendingCompanyApprovals = Company::where('status', 'pending')->count();
 
-        $unpaidInvoices = Invoice::whereIn('status', ['unpaid', 'overdue'])->count();
+        $unpaidInvoices = Invoice::whereIn('status', ['issued', 'partially_paid'])->count();
 
-        $paymentsToday = Payment::where('status', 'success')
+        $paymentsToday = Payment::whereIn('status', ['success', 'settlement'])
             ->whereDate('paid_at', $today)
             ->count();
 
@@ -80,7 +83,9 @@ class DashboardController extends Controller
             ]);
 
         $overdueInvoiceRows = Invoice::with('company:id,name')
-            ->where('status', 'overdue')
+            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereNotNull('due_date')
+            ->where('due_date', '<', $today)
             ->orderBy('due_date')
             ->limit(8)
             ->get()

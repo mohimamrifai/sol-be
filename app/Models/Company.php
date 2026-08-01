@@ -93,7 +93,11 @@ class Company extends Model
 
     public function hasOverdueInvoices(): bool
     {
-        return $this->invoices()->where('status', 'overdue')->exists();
+        return $this->invoices()
+            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereNotNull('due_date')
+            ->where('due_date', '<', now()->toDateString())
+            ->exists();
     }
 
     public static function normalizeName(string $name): string

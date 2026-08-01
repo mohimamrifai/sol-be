@@ -18,6 +18,7 @@ class Invoice extends Model
         'subtotal', 'tax_amount', 'total_amount',
         'issued_date', 'due_date', 'status',
         'notes', 'created_by',
+        'company_snapshot', 'shipment_snapshot',
     ];
 
     protected function casts(): array
@@ -28,6 +29,8 @@ class Invoice extends Model
             'total_amount' => 'decimal:2',
             'issued_date' => 'date',
             'due_date' => 'date',
+            'company_snapshot' => 'array',
+            'shipment_snapshot' => 'array',
         ];
     }
 
@@ -67,6 +70,11 @@ class Invoice extends Model
         return $this->hasMany(Payment::class);
     }
 
+    public function activities(): HasMany
+    {
+        return $this->hasMany(InvoiceActivity::class);
+    }
+
     public function latestPayment(): HasOne
     {
         return $this->hasOne(Payment::class)->latestOfMany();
@@ -75,11 +83,46 @@ class Invoice extends Model
     // ── Helpers ──
     public function isOverdue(): bool
     {
-        return $this->status === 'unpaid' && $this->due_date->isPast();
+        return $this->due_date !== null && $this->due_date->isPast();
     }
 
-    public function markAsPaid(): void
+    public function paidAmount(): float
     {
-        $this->update(['status' => 'paid']);
+        $sum = $this->payments()
+            ->whereIn('status', ['success', 'settlement'])
+            ->sum('amount');
+
+        return (float) $sum;
+    }
+
+    public function outstandingAmount(): float
+    {
+        return max((float) $this->total_amount - $this->paidAmount(), 0);
+    }
+
+    public function syncStatusFromPayments(): void
+    {
+        if ($this->status === 'cancelled') {
+            return;
+        }
+
+        if ($this->status === 'draft') {
+            return;
+        }
+
+        $outstanding = $this->outstandingAmount();
+        $paid = $this->paidAmount();
+
+        if ($outstanding <= 0) {
+            $this->update(['status' => 'paid']);
+            return;
+        }
+
+        if ($paid > 0) {
+            $this->update(['status' => 'partially_paid']);
+            return;
+        }
+
+        $this->update(['status' => 'issued']);
     }
 }

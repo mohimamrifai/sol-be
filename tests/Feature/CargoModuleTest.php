@@ -16,7 +16,6 @@ class CargoModuleTest extends TestCase
         parent::setUp();
         $this->seed(\Database\Seeders\RolesAndPermissionsSeeder::class);
         $this->seed(\Database\Seeders\MasterDataSeeder::class);
-        $this->seed(\Database\Seeders\OperationalDataSeeder::class);
     }
 
     public function test_residual_equipment_condition_sets_dangerous_goods_to_true()

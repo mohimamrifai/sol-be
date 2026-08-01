@@ -9,10 +9,14 @@ use Illuminate\Support\Str;
 
 class MidtransService
 {
-    public function createSnapTransaction(Invoice $invoice, array $customerDetails): array
+    public function createSnapTransaction(Invoice $invoice, array $customerDetails, float $amount): array
     {
+        if ($amount <= 0) {
+            throw new \InvalidArgumentException('Jumlah pembayaran tidak valid.');
+        }
+
         $orderId = 'INV-' . $invoice->id . '-' . Str::random(6);
-        $grossAmount = (int) round($invoice->total_amount);
+        $grossAmount = (int) round($amount);
 
         $payload = [
             'transaction_details' => [
@@ -55,7 +59,7 @@ class MidtransService
         Payment::create([
             'invoice_id' => $invoice->id,
             'midtrans_order_id' => $orderId,
-            'amount' => $invoice->total_amount,
+            'amount' => $amount,
             'status' => 'pending',
             'midtrans_response' => $body,
         ]);
@@ -156,7 +160,7 @@ class MidtransService
         $payment->refresh();
 
         if ($payment->isSuccess()) {
-            $payment->invoice->markAsPaid();
+            $payment->invoice->syncStatusFromPayments();
         }
     }
 

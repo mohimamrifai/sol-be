@@ -23,7 +23,7 @@ class DashboardController extends Controller
     private const COMPLETED_SHIPMENT_STATUSES = ['completed', 'cancelled'];
 
     /** Invoice statuses that count as "unpaid" (issued + partially paid). */
-    private const UNPAID_INVOICE_STATUSES = ['unpaid', 'overdue'];
+    private const UNPAID_INVOICE_STATUSES = ['issued', 'partially_paid'];
 
     /**
      * Aggregated payload for the customer dashboard.
@@ -84,7 +84,7 @@ class DashboardController extends Controller
             ->whereIn('status', self::UNPAID_INVOICE_STATUSES)
             ->sum('total_amount');
 
-        $unpaidPaid = (float) Payment::where('status', 'success')
+        $unpaidPaid = (float) Payment::whereIn('status', ['success', 'settlement'])
             ->whereHas('invoice', function ($q) use ($companyId) {
                 $q->where('company_id', $companyId)
                     ->whereIn('status', self::UNPAID_INVOICE_STATUSES);
