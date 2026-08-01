@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Payment;
+use App\Models\PaymentActivity;
 use App\Services\MidtransService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class PaymentController extends Controller
 {
@@ -133,8 +135,12 @@ class PaymentController extends Controller
         }
 
         $validated = $request->validate([
+            'decision' => ['nullable', 'string', 'in:approve,reject'],
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
+
+        $decision = $validated['decision'] ?? 'approve';
+        $isApproved = $decision !== 'reject';
 
         $payment->load('invoice');
         $invoice = $payment->invoice;
@@ -145,32 +151,67 @@ class PaymentController extends Controller
             ], 422);
         }
 
-        if ($payment->status === 'success') {
+        if ($payment->status === 'success' && $payment->manual_status === Payment::MANUAL_VERIFIED) {
             $payment->load(['invoice.company', 'invoice.shipment']);
 
             return response()->json([
-                'message' => 'Pembayaran ini sudah tercatat sukses.',
+                'message' => 'Pembayaran ini sudah diverifikasi.',
                 'data' => $payment,
             ]);
         }
 
-        $payment->update([
-            'status' => 'success',
-            'payment_type' => $payment->payment_type ?: 'manual_confirmation',
-            'paid_at' => now(),
-            'midtrans_response' => array_merge($payment->midtrans_response ?? [], [
+        $update = [
+            'manual_status' => $isApproved ? Payment::MANUAL_VERIFIED : Payment::MANUAL_REJECTED,
+            'manual_verified_at' => now(),
+            'manual_verified_by' => $request->user()->id,
+        ];
+
+        if ($isApproved) {
+            $update['status'] = 'success';
+            $update['payment_type'] = $payment->payment_type ?: 'manual_confirmation';
+            $update['paid_at'] = $payment->paid_at ?: now();
+            $update['method'] = $payment->method ?: Payment::METHOD_TRANSFER;
+            $update['midtrans_response'] = array_merge($payment->midtrans_response ?? [], [
                 'manual_verification' => true,
                 'manual_note' => $validated['note'] ?? null,
                 'verified_by_user_id' => $request->user()->id,
                 'verified_at' => now()->toIso8601String(),
-            ]),
-        ]);
+            ]);
+        } else {
+            $update['midtrans_response'] = array_merge($payment->midtrans_response ?? [], [
+                'manual_rejected' => true,
+                'manual_note' => $validated['note'] ?? null,
+                'verified_by_user_id' => $request->user()->id,
+                'verified_at' => now()->toIso8601String(),
+            ]);
+        }
 
-        $payment->invoice->syncStatusFromPayments();
+        $payment->update($update);
+
+        if ($isApproved) {
+            $payment->invoice->syncStatusFromPayments();
+        }
+
         $payment->load(['invoice.company', 'invoice.shipment']);
 
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $request->user()->id,
+                'event_key' => $isApproved ? 'payment_proof_verified' : 'payment_proof_rejected',
+                'description' => $isApproved
+                    ? 'Bukti pembayaran diverifikasi oleh tim finance.'
+                    : 'Bukti pembayaran ditolak oleh tim finance.',
+                'meta' => [
+                    'note' => $validated['note'] ?? null,
+                    'invoice_status' => $payment->invoice?->status,
+                ],
+                'occurred_at' => now(),
+            ]);
+        }
+
         return response()->json([
-            'message' => 'Pembayaran diverifikasi manual.',
+            'message' => $isApproved ? 'Pembayaran diverifikasi manual.' : 'Bukti pembayaran ditolak.',
             'data' => $payment,
         ]);
     }

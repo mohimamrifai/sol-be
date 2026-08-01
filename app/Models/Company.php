@@ -36,7 +36,18 @@ class Company extends Model
         'billing_cycle',
         'payment_type',
         'postpaid_term_days',
+        'manual_payment_enabled',
+        'bank_name',
+        'bank_account_number',
+        'bank_account_name',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'manual_payment_enabled' => 'boolean',
+        ];
+    }
 
     protected static function booted(): void
     {

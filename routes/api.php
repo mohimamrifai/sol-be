@@ -271,7 +271,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('invoices/{invoice}', [CustomerInvoiceController::class, 'show']);
         Route::get('invoices/{invoice}/pdf', [CustomerInvoiceController::class, 'downloadPdf']);
         // Payment
+        Route::get('payments/stats', [CustomerPaymentController::class, 'stats']);
         Route::get('payments', [CustomerPaymentController::class, 'index']);
+        Route::get('payments/{payment}', [CustomerPaymentController::class, 'show']);
+        Route::post('payments/{payment}/sync-midtrans', [CustomerPaymentController::class, 'syncMidtrans']);
+        Route::post('payments/{payment}/manual-submit', [CustomerPaymentController::class, 'manualSubmit']);
+        Route::get('payments/{payment}/receipt', [CustomerPaymentController::class, 'receipt']);
+        Route::get('payments/{payment}/proof-preview', [CustomerPaymentController::class, 'proofPreview']);
+        Route::get('payments/{payment}/proof-download', [CustomerPaymentController::class, 'proofDownload']);
         Route::post('invoices/{invoice}/pay', [CustomerPaymentController::class, 'pay']);
 
         // Documents (virtual aggregation across booking, shipment, billing)

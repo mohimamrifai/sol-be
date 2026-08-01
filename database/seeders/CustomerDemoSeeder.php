@@ -14,6 +14,8 @@ use App\Models\InvoiceActivity;
 use App\Models\InvoiceItem;
 use App\Models\Location;
 use App\Models\Payment;
+use App\Models\PaymentActivity;
+use App\Models\PaymentProofAttachment;
 use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
@@ -72,6 +74,8 @@ class CustomerDemoSeeder extends Seeder
     private function truncateCustomerData(): void
     {
         $tables = [
+            'payment_proof_attachments',
+            'payment_activities',
             'invoice_activities',
             'invoice_items',
             'payments',
@@ -124,6 +128,10 @@ class CustomerDemoSeeder extends Seeder
             'billing_cycle' => 'end_of_month',
             'payment_type' => 'postpaid',
             'postpaid_term_days' => 14,
+            'manual_payment_enabled' => true,
+            'bank_name' => 'BCA',
+            'bank_account_number' => '123-456-7890',
+            'bank_account_name' => 'PT ABC Indonesia',
         ]);
     }
 
@@ -560,11 +568,11 @@ class CustomerDemoSeeder extends Seeder
         $ops = $customerUsers->firstWhere('email', 'ops@customer.test');
 
         $scenarios = [
-            ['status' => 'draft', 'count' => 1, 'issued_offset' => null, 'due_offset' => null, 'paid_amount' => 0],
-            ['status' => 'issued', 'count' => 3, 'issued_offset' => -5, 'due_offset' => 9, 'paid_amount' => 0],
-            ['status' => 'partially_paid', 'count' => 2, 'issued_offset' => -15, 'due_offset' => -1, 'paid_amount' => 0.5],
-            ['status' => 'paid', 'count' => 2, 'issued_offset' => -25, 'due_offset' => 5, 'paid_amount' => 1.0],
-            ['status' => 'issued', 'count' => 2, 'issued_offset' => -30, 'due_offset' => -5, 'paid_amount' => 0, 'overdue' => true],
+            ['status' => 'draft', 'count' => 1, 'issued_offset' => null, 'due_offset' => null, 'paid_amount' => 0, 'payment_type' => null],
+            ['status' => 'issued', 'count' => 3, 'issued_offset' => -5, 'due_offset' => 9, 'paid_amount' => 0, 'payment_type' => 'pending'],
+            ['status' => 'partially_paid', 'count' => 2, 'issued_offset' => -15, 'due_offset' => -1, 'paid_amount' => 0.5, 'payment_type' => 'success'],
+            ['status' => 'paid', 'count' => 2, 'issued_offset' => -25, 'due_offset' => 5, 'paid_amount' => 1.0, 'payment_type' => 'success'],
+            ['status' => 'issued', 'count' => 2, 'issued_offset' => -30, 'due_offset' => -5, 'paid_amount' => 0, 'overdue' => true, 'payment_type' => 'pending'],
         ];
 
         $cursor = 0;
@@ -589,7 +597,8 @@ class CustomerDemoSeeder extends Seeder
                     $scenario['issued_offset'],
                     $scenario['due_offset'],
                     $scenario['paid_amount'],
-                    $scenario['overdue'] ?? false
+                    $scenario['overdue'] ?? false,
+                    $scenario['payment_type'] ?? null
                 );
             }
         }
@@ -604,7 +613,8 @@ class CustomerDemoSeeder extends Seeder
         ?int $issuedOffset,
         ?int $dueOffset,
         float $paidRatio,
-        bool $overdue = false
+        bool $overdue = false,
+        ?string $paymentType = null
     ): void {
         $subtotal = (float) ($booking->estimated_price ?? 10000000);
         $tax = round($subtotal * 0.11, 2);
@@ -672,15 +682,16 @@ class CustomerDemoSeeder extends Seeder
 
         if ($paidRatio > 0) {
             $paidAmount = round($total * $paidRatio, 2);
-            Payment::create([
-                'invoice_id' => $invoice->id,
-                'midtrans_order_id' => 'SEED-'.$invoice->id.'-'.uniqid(),
-                'midtrans_transaction_id' => 'TX-'.strtoupper(uniqid()),
-                'amount' => $paidAmount,
-                'payment_type' => $paidRatio >= 1 ? 'bank_transfer' : 'partial_bank',
-                'status' => 'success',
-                'paid_at' => now()->subDays(1),
-            ]);
+            $payment = $this->createSeededPayment(
+                $invoice,
+                $paidAmount,
+                $finance,
+                'success',
+                'bank_transfer',
+                Payment::METHOD_TRANSFER,
+                now()->subDays(1)
+            );
+
             InvoiceActivity::create([
                 'invoice_id' => $invoice->id,
                 'actor_user_id' => $finance->id,
@@ -688,6 +699,36 @@ class CustomerDemoSeeder extends Seeder
                 'description' => 'Pembayaran diterima via bank transfer',
                 'occurred_at' => now()->subDays(1),
             ]);
+        } elseif ($paymentType === 'pending' && $status !== 'draft') {
+            $this->createSeededPayment(
+                $invoice,
+                $total,
+                $finance,
+                'pending',
+                null,
+                Payment::METHOD_MIDTRANS,
+                null,
+                now()->addDay()
+            );
+        } elseif ($status === 'partially_paid') {
+            $halfAmount = round($total * 0.5, 2);
+            $this->createSeededPayment(
+                $invoice,
+                $halfAmount,
+                $finance,
+                'pending',
+                null,
+                Payment::METHOD_TRANSFER,
+                null,
+                now()->addDay(),
+                Payment::MANUAL_SUBMITTED,
+                [
+                    'payment_date' => now()->subDays(2)->toDateString(),
+                    'bank_name' => 'BCA',
+                    'reference_number' => 'TRF-'.strtoupper(uniqid()),
+                    'remark' => 'Sebagian pembayaran menunggu verifikasi tim finance.',
+                ]
+            );
         }
 
         $invoice->refresh();
@@ -704,6 +745,94 @@ class CustomerDemoSeeder extends Seeder
         }
 
         $this->seedBookingAttachment($booking, $ops, $shipment, $invoice);
+    }
+
+    private function createSeededPayment(
+        Invoice $invoice,
+        float $amount,
+        User $actor,
+        string $status,
+        ?string $paymentType,
+        string $method,
+        ?\Carbon\Carbon $paidAt = null,
+        ?\Carbon\Carbon $expiredAt = null,
+        string $manualStatus = Payment::MANUAL_UNSUBMITTED,
+        array $manualMeta = []
+    ): Payment {
+        $nextNumber = (int) (Payment::query()
+            ->whereHas('invoice', fn ($q) => $q->where('company_id', $invoice->company_id))
+            ->max('payment_number') ?? 0) + 1;
+
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'payment_number' => $nextNumber,
+            'midtrans_order_id' => $status === 'pending' ? 'SEED-MT-'.$invoice->id.'-'.uniqid() : null,
+            'midtrans_transaction_id' => $status === 'success' ? 'TX-'.strtoupper(uniqid()) : null,
+            'amount' => $amount,
+            'payment_type' => $paymentType,
+            'method' => $method,
+            'status' => $status,
+            'paid_at' => $paidAt,
+            'expired_at' => $expiredAt,
+            'manual_status' => $manualStatus,
+            'manual_payment_date' => $manualMeta['payment_date'] ?? null,
+            'manual_bank_name' => $manualMeta['bank_name'] ?? null,
+            'manual_reference_number' => $manualMeta['reference_number'] ?? null,
+            'manual_remark' => $manualMeta['remark'] ?? null,
+            'manual_submitted_at' => $manualStatus !== Payment::MANUAL_UNSUBMITTED ? now()->subDay() : null,
+            'midtrans_response' => $status === 'pending' ? [
+                'redirect_url' => 'https://app.sandbox.midtrans.com/snap/v2/vtweb/'.bin2hex(random_bytes(6)),
+                'token' => bin2hex(random_bytes(12)),
+                'expiry_time' => $expiredAt?->toIso8601String(),
+                'seed' => true,
+            ] : null,
+        ]);
+
+        $this->logPaymentActivity($payment, $actor, 'payment_created', 'Payment dibuat via seed.', now()->subDays(2));
+
+        if ($status === 'pending' && $method === Payment::METHOD_MIDTRANS) {
+            $this->logPaymentActivity($payment, $actor, 'payment_link_generated', 'Payment Link dibuat via Midtrans Snap.', now()->subDays(2));
+        }
+
+        if ($status === 'success') {
+            $this->logPaymentActivity($payment, $actor, 'midtrans_callback', 'Midtrans mengirim callback settlement.', $paidAt ?? now()->subDay());
+            $this->logPaymentActivity($payment, $actor, 'payment_settled', 'Pembayaran berhasil (Settlement).', $paidAt ?? now()->subDay());
+        }
+
+        if ($manualStatus === Payment::MANUAL_SUBMITTED) {
+            $this->logPaymentActivity(
+                $payment,
+                $actor,
+                'payment_proof_uploaded',
+                'Customer mengunggah bukti pembayaran manual.',
+                now()->subDay(),
+                ['bank_name' => $manualMeta['bank_name'] ?? null]
+            );
+        }
+
+        return $payment;
+    }
+
+    private function logPaymentActivity(
+        Payment $payment,
+        ?User $actor,
+        string $eventKey,
+        string $description,
+        \Carbon\Carbon $occurredAt,
+        array $meta = []
+    ): void {
+        if (! Schema::hasTable('payment_activities')) {
+            return;
+        }
+
+        PaymentActivity::create([
+            'payment_id' => $payment->id,
+            'actor_user_id' => $actor?->id,
+            'event_key' => $eventKey,
+            'description' => $description,
+            'meta' => $meta ?: null,
+            'occurred_at' => $occurredAt,
+        ]);
     }
 
     private function seedBookingAttachment(Booking $booking, User $ops, ?Shipment $shipment, Invoice $invoice): void
