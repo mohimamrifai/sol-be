@@ -24,8 +24,8 @@ class PublicTrackingController extends Controller
             ->with([
                 'originLocation:id,name,code',
                 'destinationLocation:id,name,code',
-                'trackings' => fn($q) => $q->orderBy('tracked_at', 'asc'),
-                'trackings.photos' => fn($q) => $q->where('is_public', true),
+                'trackings' => fn ($q) => $q->orderBy('tracked_at', 'asc'),
+                'trackings.photos' => fn ($q) => $q->where('is_public', true),
             ])
             ->first();
 
@@ -43,12 +43,12 @@ class PublicTrackingController extends Controller
                 'estimated_arrival' => $shipment->estimated_arrival,
                 'actual_departure' => $shipment->actual_departure,
                 'actual_arrival' => $shipment->actual_arrival,
-                'timeline' => $shipment->trackings->map(fn($t) => [
+                'timeline' => $shipment->trackings->map(fn ($t) => [
                     'status' => $t->status,
                     'notes' => $t->notes,
                     'location' => $t->location,
                     'tracked_at' => $t->tracked_at,
-                    'photos' => $t->photos->map(fn($p) => ['path' => $p->path, 'url' => $p->url]),
+                    'photos' => $t->photos->map(fn ($p) => ['path' => $p->path, 'url' => $p->url]),
                 ]),
             ],
         ]);
@@ -65,7 +65,7 @@ class PublicTrackingController extends Controller
             ->with([
                 'originLocation', 'destinationLocation', 'serviceType', 'booking.cargoCategory',
                 'items',
-                'trackings' => fn ($q) => $q->orderBy('tracked_at', 'asc')
+                'trackings' => fn ($q) => $q->orderBy('tracked_at', 'asc'),
             ])
             ->first();
 
@@ -75,7 +75,7 @@ class PublicTrackingController extends Controller
 
         $pdf = Pdf::loadView('pdf.consignment-note', ['shipment' => $shipment]);
 
-        return $pdf->download('consignment-note-' . $shipment->waybill_number . '.pdf');
+        return $pdf->download('consignment-note-'.$shipment->waybill_number.'.pdf');
     }
 
     /**
@@ -98,6 +98,6 @@ class PublicTrackingController extends Controller
 
         $pdf = Pdf::loadView('pdf.waybill', ['shipment' => $shipment]);
 
-        return $pdf->download('waybill-' . $shipment->waybill_number . '.pdf');
+        return $pdf->download('waybill-'.$shipment->waybill_number.'.pdf');
     }
 }

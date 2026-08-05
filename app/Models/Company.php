@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -40,12 +41,23 @@ class Company extends Model
         'bank_name',
         'bank_account_number',
         'bank_account_name',
+        'billing_type',
+        'pricing_type',
+        'discount_percent',
+        'payment_term',
+        'credit_limit',
+        'current_deposit_balance',
+        'outstanding_balance',
     ];
 
     protected function casts(): array
     {
         return [
             'manual_payment_enabled' => 'boolean',
+            'discount_percent' => 'decimal:2',
+            'credit_limit' => 'decimal:2',
+            'current_deposit_balance' => 'decimal:2',
+            'outstanding_balance' => 'decimal:2',
         ];
     }
 
@@ -95,6 +107,21 @@ class Company extends Model
     public function customerDiscounts(): HasMany
     {
         return $this->hasMany(CustomerDiscount::class);
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(CompanyDocument::class)->orderByDesc('id');
+    }
+
+    public function customerLocations(): HasMany
+    {
+        return $this->hasMany(CustomerLocation::class);
+    }
+
+    public function activities(): MorphMany
+    {
+        return $this->morphMany(CompanyActivity::class, 'subject')->orderByDesc('occurred_at');
     }
 
     public function isActive(): bool

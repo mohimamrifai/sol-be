@@ -75,10 +75,15 @@ return new class extends Migration
 
         Schema::table('invoices', function (Blueprint $table): void {
             $cols = [];
-            if (Schema::hasColumn('invoices', 'company_snapshot')) $cols[] = 'company_snapshot';
-            if (Schema::hasColumn('invoices', 'shipment_snapshot')) $cols[] = 'shipment_snapshot';
-            if ($cols !== []) $table->dropColumn($cols);
+            if (Schema::hasColumn('invoices', 'company_snapshot')) {
+                $cols[] = 'company_snapshot';
+            }
+            if (Schema::hasColumn('invoices', 'shipment_snapshot')) {
+                $cols[] = 'shipment_snapshot';
+            }
+            if ($cols !== []) {
+                $table->dropColumn($cols);
+            }
         });
     }
 };
-

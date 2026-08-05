@@ -3,16 +3,16 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\AdditionalCharge;
 use App\Models\AdditionalService;
 use App\Models\CargoCategory;
 use App\Models\ContainerType;
+use App\Models\DgClass;
 use App\Models\Location;
 use App\Models\ServiceType;
 use App\Models\Train;
 use App\Models\TrainCar;
 use App\Models\TransportMode;
-use App\Models\DgClass;
-use App\Models\AdditionalCharge;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -537,6 +537,7 @@ class MasterDataController extends Controller
             $s = $request->search;
             $query->where('name', 'like', "%{$s}%")->orWhere('code', 'like', "%{$s}%");
         }
+
         return response()->json($query->orderBy('code')->paginate($request->per_page ?? 15));
     }
 
@@ -548,6 +549,7 @@ class MasterDataController extends Controller
             'description' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
+
         return response()->json(['data' => DgClass::create($data)], 201);
     }
 
@@ -560,12 +562,14 @@ class MasterDataController extends Controller
             'is_active' => 'boolean',
         ]);
         $dgClass->update($data);
+
         return response()->json(['data' => $dgClass]);
     }
 
     public function destroyDgClass(DgClass $dgClass): JsonResponse
     {
         $dgClass->delete();
+
         return response()->json(['message' => 'DG Class berhasil dihapus.']);
     }
 
@@ -577,6 +581,7 @@ class MasterDataController extends Controller
             $s = $request->search;
             $query->where('name', 'like', "%{$s}%")->orWhere('code', 'like', "%{$s}%");
         }
+
         return response()->json($query->orderBy('name')->paginate($request->per_page ?? 15));
     }
 
@@ -588,6 +593,7 @@ class MasterDataController extends Controller
             'description' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
+
         return response()->json(['data' => AdditionalCharge::create($data)], 201);
     }
 
@@ -600,12 +606,14 @@ class MasterDataController extends Controller
             'is_active' => 'boolean',
         ]);
         $additionalCharge->update($data);
+
         return response()->json(['data' => $additionalCharge]);
     }
 
     public function destroyAdditionalCharge(AdditionalCharge $additionalCharge): JsonResponse
     {
         $additionalCharge->delete();
+
         return response()->json(['message' => 'Additional Charge berhasil dihapus.']);
     }
 }

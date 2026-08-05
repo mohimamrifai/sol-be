@@ -33,4 +33,3 @@ class TrainCar extends Model
         return $this->belongsTo(Train::class);
     }
 }
-

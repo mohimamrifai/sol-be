@@ -169,8 +169,10 @@ class PaymentController extends Controller
 
         $payment->load(['invoice', 'invoice.company', 'invoice.shipment', 'invoice.shipment.booking', 'invoice.payments']);
 
+        // Treat cross-tenant access as "not found" so unauthorized users cannot
+        // enumerate payment ids that belong to other companies.
         if (! $payment->invoice || $payment->invoice->company_id !== $user->company_id) {
-            return response()->json(['message' => 'Akses ditolak.'], 403);
+            return response()->json(['message' => 'Payment not found.'], 404);
         }
 
         if (Schema::hasTable('payment_activities')) {

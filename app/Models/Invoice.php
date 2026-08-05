@@ -4,10 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Invoice extends Model
 {
@@ -39,7 +39,7 @@ class Invoice extends Model
     {
         static::creating(function (Invoice $invoice) {
             if (empty($invoice->invoice_number)) {
-                $invoice->invoice_number = 'INV-' . now()->format('Ymd') . '-' . strtoupper(substr(uniqid(), -5));
+                $invoice->invoice_number = 'INV-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
             }
         });
     }
@@ -115,11 +115,13 @@ class Invoice extends Model
 
         if ($outstanding <= 0) {
             $this->update(['status' => 'paid']);
+
             return;
         }
 
         if ($paid > 0) {
             $this->update(['status' => 'partially_paid']);
+
             return;
         }
 

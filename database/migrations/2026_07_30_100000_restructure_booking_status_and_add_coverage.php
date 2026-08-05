@@ -1,10 +1,10 @@
 <?php
 
-use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Database\Schema\Blueprint;
 
 return new class extends Migration
 {
@@ -32,7 +32,7 @@ return new class extends Migration
                     if (! empty($row->notes) && str_contains((string) $row->notes, 'Dibatalkan oleh Customer')) {
                         $fromNotes = trim(preg_replace('/^\[System:.*?\]/m', '', (string) $row->notes) ?? '');
                     }
-                    $reason = trim(($existing ?: '') . ($fromNotes ? "\n" . $fromNotes : ''));
+                    $reason = trim(($existing ?: '').($fromNotes ? "\n".$fromNotes : ''));
                     DB::table('bookings')
                         ->where('id', $row->id)
                         ->update([

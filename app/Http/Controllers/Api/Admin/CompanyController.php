@@ -7,6 +7,7 @@ use App\Models\Company;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 
 class CompanyController extends Controller
 {
@@ -53,7 +54,7 @@ class CompanyController extends Controller
             'billing_cycle' => 'required|in:half_monthly_1,half_monthly_2,both_half,end_of_month',
             'payment_type' => 'required|in:prepaid,postpaid',
             'postpaid_term_days' => 'nullable|integer|min:0|max:365',
-            
+
             // PIC / User Login fields
             'pic_name' => 'nullable|string|max:255',
             'pic_email' => 'nullable|email|max:255|unique:users,email',
@@ -63,11 +64,11 @@ class CompanyController extends Controller
 
         $company = Company::create($validated);
 
-        if (!empty($validated['pic_email']) && !empty($validated['password'])) {
+        if (! empty($validated['pic_email']) && ! empty($validated['password'])) {
             $user = User::create([
                 'name' => $validated['pic_name'] ?? $validated['contact_person'] ?? $company->name,
                 'email' => $validated['pic_email'],
-                'password' => \Illuminate\Support\Facades\Hash::make($validated['password']),
+                'password' => Hash::make($validated['password']),
                 'phone' => $validated['pic_phone'] ?? null,
                 'user_type' => 'customer',
                 'company_id' => $company->id,

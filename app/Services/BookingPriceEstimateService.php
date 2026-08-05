@@ -147,7 +147,7 @@ class BookingPriceEstimateService
         if ($containerTypeId && $containerCount > 0) {
             return (float) $pricing->price_per_container * $containerCount;
         }
-        
+
         $minKg = (float) ($pricing->min_kg ?? 0);
         $minCharge = (float) ($pricing->minimum_charge ?? 0);
         $nextPrice = (float) ($pricing->price_per_kg ?? 0);
@@ -161,9 +161,10 @@ class BookingPriceEstimateService
                 $extraWeight = $weight - $minKg;
                 $subtotal = $minCharge + ($extraWeight * $nextPrice);
             }
-            
+
             // Compare with CBM if CBM is provided and price_per_cbm is set
             $byCbm = $cbm > 0 ? (float) $pricing->price_per_cbm * $cbm : 0.0;
+
             return max($subtotal, $byCbm);
         }
 
@@ -172,6 +173,7 @@ class BookingPriceEstimateService
         $byCbm = $cbm > 0 ? (float) $pricing->price_per_cbm * $cbm : 0.0;
         $subtotal = max($byWeight, $byCbm);
         $minimum = (float) $pricing->minimum_charge;
+
         return $minimum > 0 ? max($subtotal, $minimum) : $subtotal;
     }
 
@@ -200,6 +202,7 @@ class BookingPriceEstimateService
         if ($discount->discount_type === 'percentage') {
             return $amount * ((float) $discount->discount_value / 100);
         }
+
         return min((float) $discount->discount_value, $amount);
     }
 }

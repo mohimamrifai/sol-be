@@ -2,8 +2,16 @@
 
 namespace App\Http\Controllers\Api\Customer;
 
-use App\Models\Booking;
 use App\Http\Controllers\Controller;
+use App\Models\AdditionalCharge;
+use App\Models\AdditionalService;
+use App\Models\Booking;
+use App\Models\CargoCategory;
+use App\Models\ContainerType;
+use App\Models\DgClass;
+use App\Models\Location;
+use App\Models\ServiceType;
+use App\Models\TransportMode;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -14,7 +22,7 @@ class MasterDataReadController extends Controller
 {
     public function locations(Request $request): JsonResponse
     {
-        $query = \App\Models\Location::query()->where('is_active', true);
+        $query = Location::query()->where('is_active', true);
         if ($request->filled('type')) {
             $query->where('type', $request->type);
         }
@@ -27,7 +35,7 @@ class MasterDataReadController extends Controller
 
     public function transportModes(): JsonResponse
     {
-        $data = \App\Models\TransportMode::query()
+        $data = TransportMode::query()
             ->where('is_active', true)
             ->with(['serviceTypes' => fn ($q) => $q->where('is_active', true)])
             ->orderBy('name')
@@ -38,7 +46,7 @@ class MasterDataReadController extends Controller
 
     public function serviceTypes(Request $request): JsonResponse
     {
-        $query = \App\Models\ServiceType::with('transportMode')
+        $query = ServiceType::with('transportMode')
             ->where('is_active', true);
         if ($request->filled('transport_mode_id')) {
             $query->where('transport_mode_id', $request->transport_mode_id);
@@ -49,7 +57,7 @@ class MasterDataReadController extends Controller
 
     public function containerTypes(): JsonResponse
     {
-        $data = \App\Models\ContainerType::query()
+        $data = ContainerType::query()
             ->where('is_active', true)
             ->orderBy('size')
             ->get();
@@ -59,7 +67,7 @@ class MasterDataReadController extends Controller
 
     public function additionalServices(): JsonResponse
     {
-        $data = \App\Models\AdditionalService::query()
+        $data = AdditionalService::query()
             ->where('is_active', true)
             ->orderBy('category')
             ->orderBy('name')
@@ -70,7 +78,7 @@ class MasterDataReadController extends Controller
 
     public function cargoCategories(): JsonResponse
     {
-        $data = \App\Models\CargoCategory::query()
+        $data = CargoCategory::query()
             ->where('is_active', true)
             ->orderBy('name')
             ->get();
@@ -80,7 +88,7 @@ class MasterDataReadController extends Controller
 
     public function dgClasses(): JsonResponse
     {
-        $data = \App\Models\DgClass::query()
+        $data = DgClass::query()
             ->where('is_active', true)
             ->orderBy('code')
             ->get();
@@ -90,7 +98,7 @@ class MasterDataReadController extends Controller
 
     public function additionalCharges(): JsonResponse
     {
-        $data = \App\Models\AdditionalCharge::query()
+        $data = AdditionalCharge::query()
             ->where('is_active', true)
             ->orderBy('name')
             ->get();

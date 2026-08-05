@@ -104,6 +104,7 @@ class DocumentController extends Controller
     public function shipmentOptions(Request $request): JsonResponse
     {
         $user = $request->user();
+
         return response()->json(['data' => $this->aggregator->shipmentOptions((int) $user->company_id)]);
     }
 
@@ -161,9 +162,9 @@ class DocumentController extends Controller
             'Content-Length' => (string) strlen($content),
         ];
         if ($force) {
-            $headers['Content-Disposition'] = 'attachment; filename="' . addslashes($filename) . '"';
+            $headers['Content-Disposition'] = 'attachment; filename="'.addslashes($filename).'"';
         } else {
-            $headers['Content-Disposition'] = 'inline; filename="' . addslashes($filename) . '"';
+            $headers['Content-Disposition'] = 'inline; filename="'.addslashes($filename).'"';
         }
 
         return response($content, 200, $headers);
@@ -186,7 +187,7 @@ class DocumentController extends Controller
             'Content-Length' => (string) strlen($content),
         ];
         $headers['Content-Disposition'] = ($force ? 'attachment' : 'inline')
-            . '; filename="' . addslashes($filename) . '"';
+            .'; filename="'.addslashes($filename).'"';
 
         return response($content, 200, $headers);
     }
@@ -194,6 +195,7 @@ class DocumentController extends Controller
     private function guessMime(string $path): string
     {
         $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+
         return match ($ext) {
             'pdf' => 'application/pdf',
             'jpg', 'jpeg' => 'image/jpeg',
@@ -216,7 +218,7 @@ class DocumentController extends Controller
             'Content-Length' => (string) strlen($content),
         ];
         $headers['Content-Disposition'] = ($force ? 'attachment' : 'inline')
-            . '; filename="' . addslashes($filename) . '"';
+            .'; filename="'.addslashes($filename).'"';
 
         return response($content, 200, $headers);
     }
@@ -225,8 +227,13 @@ class DocumentController extends Controller
     {
         $clean = preg_replace('/[^\w\-\.]+/u', '_', $name) ?? $fallbackExt;
         $clean = trim($clean, '_');
-        if ($clean === '') $clean = 'document';
-        if (! str_contains($clean, '.')) $clean .= '.' . $fallbackExt;
+        if ($clean === '') {
+            $clean = 'document';
+        }
+        if (! str_contains($clean, '.')) {
+            $clean .= '.'.$fallbackExt;
+        }
+
         return $clean;
     }
 }

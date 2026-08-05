@@ -12,16 +12,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('cargo_categories', function (Blueprint $table) {
-            if (!Schema::hasColumn('cargo_categories', 'requires_temperature')) {
+            if (! Schema::hasColumn('cargo_categories', 'requires_temperature')) {
                 $table->boolean('requires_temperature')->default(false)->after('description');
             }
-            if (!Schema::hasColumn('cargo_categories', 'is_project_cargo')) {
+            if (! Schema::hasColumn('cargo_categories', 'is_project_cargo')) {
                 $table->boolean('is_project_cargo')->default(false)->after('requires_temperature');
             }
-            if (!Schema::hasColumn('cargo_categories', 'is_liquid')) {
+            if (! Schema::hasColumn('cargo_categories', 'is_liquid')) {
                 $table->boolean('is_liquid')->default(false)->after('is_project_cargo');
             }
-            if (!Schema::hasColumn('cargo_categories', 'is_food')) {
+            if (! Schema::hasColumn('cargo_categories', 'is_food')) {
                 $table->boolean('is_food')->default(false)->after('is_liquid');
             }
         });

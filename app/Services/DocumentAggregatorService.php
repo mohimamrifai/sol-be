@@ -108,6 +108,7 @@ class DocumentAggregatorService
                         return true;
                     }
                 }
+
                 return false;
             });
         }
@@ -122,10 +123,17 @@ class DocumentAggregatorService
         if ($dateFrom || $dateTo) {
             $all = $all->filter(function (array $r) use ($dateFrom, $dateTo) {
                 $d = $r['upload_date'] ?? null;
-                if (! $d) return false;
+                if (! $d) {
+                    return false;
+                }
                 $ts = strtotime((string) $d);
-                if ($dateFrom && $ts < strtotime((string) $dateFrom)) return false;
-                if ($dateTo && $ts > strtotime((string) $dateTo . ' 23:59:59')) return false;
+                if ($dateFrom && $ts < strtotime((string) $dateFrom)) {
+                    return false;
+                }
+                if ($dateTo && $ts > strtotime((string) $dateTo.' 23:59:59')) {
+                    return false;
+                }
+
                 return true;
             });
         }
@@ -174,7 +182,7 @@ class DocumentAggregatorService
             ->get(['id', 'shipment_number', 'waybill_number'])
             ->map(fn ($s) => [
                 'id' => $s->id,
-                'label' => ($s->shipment_number ?? 'SHP-') . ($s->waybill_number ? ' · ' . $s->waybill_number : ''),
+                'label' => ($s->shipment_number ?? 'SHP-').($s->waybill_number ? ' · '.$s->waybill_number : ''),
             ])
             ->all();
     }
@@ -194,7 +202,7 @@ class DocumentAggregatorService
 
         return $rows->map(function (BookingAttachment $a) {
             return [
-                'id' => DocumentType::BookingAttachment->prefix() . '-' . $a->id,
+                'id' => DocumentType::BookingAttachment->prefix().'-'.$a->id,
                 'document_type' => DocumentType::BookingAttachment->value,
                 'document_type_label' => 'Booking Attachment',
                 'name' => $a->original_name,
@@ -273,10 +281,10 @@ class DocumentAggregatorService
 
             // Invoice PDF
             $out->push([
-                'id' => DocumentType::Invoice->prefix() . '-' . $inv->id,
+                'id' => DocumentType::Invoice->prefix().'-'.$inv->id,
                 'document_type' => DocumentType::Invoice->value,
                 'document_type_label' => 'Invoice',
-                'name' => 'Invoice ' . ($inv->invoice_number ?? ('#' . $inv->id)),
+                'name' => 'Invoice '.($inv->invoice_number ?? ('#'.$inv->id)),
                 'format' => 'pdf',
                 'mime_type' => 'application/pdf',
                 'preview_supported' => true,
@@ -296,10 +304,10 @@ class DocumentAggregatorService
             // Tax Invoice — only when paid
             if (strtolower((string) $inv->status) === 'paid') {
                 $out->push([
-                    'id' => DocumentType::TaxInvoice->prefix() . '-' . $inv->id,
+                    'id' => DocumentType::TaxInvoice->prefix().'-'.$inv->id,
                     'document_type' => DocumentType::TaxInvoice->value,
                     'document_type_label' => 'Tax Invoice',
-                    'name' => 'Tax Invoice ' . ($inv->invoice_number ?? ('#' . $inv->id)),
+                    'name' => 'Tax Invoice '.($inv->invoice_number ?? ('#'.$inv->id)),
                     'format' => 'pdf',
                     'mime_type' => 'application/pdf',
                     'preview_supported' => true,
@@ -321,10 +329,10 @@ class DocumentAggregatorService
             $payments = Payment::query()->where('invoice_id', $inv->id)->where('status', 'success')->get();
             foreach ($payments as $pay) {
                 $out->push([
-                    'id' => DocumentType::PaymentReceipt->prefix() . '-' . $pay->id,
+                    'id' => DocumentType::PaymentReceipt->prefix().'-'.$pay->id,
                     'document_type' => DocumentType::PaymentReceipt->value,
                     'document_type_label' => 'Payment Receipt',
-                    'name' => 'Payment Receipt ' . ($pay->midtrans_order_id ?? ('#' . $pay->id)),
+                    'name' => 'Payment Receipt '.($pay->midtrans_order_id ?? ('#'.$pay->id)),
                     'format' => 'pdf',
                     'mime_type' => 'application/pdf',
                     'preview_supported' => true,
@@ -357,7 +365,9 @@ class DocumentAggregatorService
             ->with(['booking:id,booking_number,company_id', 'uploader:id,name'])
             ->find($id);
 
-        if (! $a) return null;
+        if (! $a) {
+            return null;
+        }
 
         return $this->shape(
             DocumentType::BookingAttachment,
@@ -395,11 +405,13 @@ class DocumentAggregatorService
             ->with(['booking:id,booking_number,company_id', 'booking.company:id,name', 'originLocation:id,name,code', 'destinationLocation:id,name,code', 'serviceType:id,name,code'])
             ->find($shipmentId);
 
-        if (! $s || empty($s->waybill_number)) return null;
+        if (! $s || empty($s->waybill_number)) {
+            return null;
+        }
 
         return $this->shape(
             DocumentType::ConsignmentNote,
-            'Consignment Note ' . ($s->waybill_number ?? ''),
+            'Consignment Note '.($s->waybill_number ?? ''),
             optional($s->created_at)->toIso8601String(),
             'Operations',
             $s->id,
@@ -424,7 +436,9 @@ class DocumentAggregatorService
             ->with(['booking:id,booking_number,company_id', 'booking.company:id,name', 'originLocation:id,name,code', 'destinationLocation:id,name,code', 'serviceType:id,name,code'])
             ->find($shipmentId);
 
-        if (! $s) return null;
+        if (! $s) {
+            return null;
+        }
 
         $allowed = ['ready_for_pickup', 'arrived', 'train_arrived', 'unloading', 'container_unloading', 'completed'];
         if (! in_array(strtolower((string) $s->status), $allowed, true)) {
@@ -433,7 +447,7 @@ class DocumentAggregatorService
 
         return $this->shape(
             DocumentType::DeliveryOrder,
-            'Delivery Order ' . ($s->shipment_number ?? ''),
+            'Delivery Order '.($s->shipment_number ?? ''),
             optional($s->updated_at)->toIso8601String() ?? optional($s->created_at)->toIso8601String(),
             'Operations',
             $s->id,
@@ -458,14 +472,16 @@ class DocumentAggregatorService
             ->with(['tracking.shipment:id,shipment_number,waybill_number,booking_id', 'tracking.shipment.booking:id,booking_number,company_id'])
             ->find($photoId);
 
-        if (! $p) return null;
+        if (! $p) {
+            return null;
+        }
 
         $s = $p->tracking?->shipment;
         $ext = $this->extension($p->path);
 
         return $this->shape(
             DocumentType::ProofOfDelivery,
-            $p->caption ?: ('POD ' . basename((string) $p->path)),
+            $p->caption ?: ('POD '.basename((string) $p->path)),
             optional($p->created_at)->toIso8601String(),
             'Operations',
             $s?->id,
@@ -494,11 +510,13 @@ class DocumentAggregatorService
             ->with(['company:id,name', 'shipment:id,shipment_number,waybill_number,booking_id', 'shipment.booking:id,booking_number'])
             ->find($invoiceId);
 
-        if (! $inv) return null;
+        if (! $inv) {
+            return null;
+        }
 
         return $this->shape(
             DocumentType::Invoice,
-            'Invoice ' . ($inv->invoice_number ?? '#' . $inv->id),
+            'Invoice '.($inv->invoice_number ?? '#'.$inv->id),
             optional($inv->created_at)->toIso8601String(),
             'Finance',
             $inv->shipment_id,
@@ -524,11 +542,13 @@ class DocumentAggregatorService
             ->with(['company:id,name', 'shipment:id,shipment_number,waybill_number,booking_id', 'shipment.booking:id,booking_number'])
             ->find($invoiceId);
 
-        if (! $inv) return null;
+        if (! $inv) {
+            return null;
+        }
 
         return $this->shape(
             DocumentType::TaxInvoice,
-            'Tax Invoice ' . ($inv->invoice_number ?? '#' . $inv->id),
+            'Tax Invoice '.($inv->invoice_number ?? '#'.$inv->id),
             optional($inv->updated_at)->toIso8601String(),
             'Finance',
             $inv->shipment_id,
@@ -554,13 +574,15 @@ class DocumentAggregatorService
             ->with(['invoice:id,invoice_number,total_amount,company_id,shipment_id', 'invoice.company:id,name', 'invoice.shipment:id,shipment_number,waybill_number,booking_id', 'invoice.shipment.booking:id,booking_number'])
             ->find($paymentId);
 
-        if (! $pay) return null;
+        if (! $pay) {
+            return null;
+        }
 
         $inv = $pay->invoice;
 
         return $this->shape(
             DocumentType::PaymentReceipt,
-            'Payment Receipt ' . ($pay->midtrans_order_id ?? '#' . $pay->id),
+            'Payment Receipt '.($pay->midtrans_order_id ?? '#'.$pay->id),
             optional($pay->paid_at)->toIso8601String() ?? optional($pay->created_at)->toIso8601String(),
             'System',
             $inv?->shipment_id,
@@ -590,10 +612,10 @@ class DocumentAggregatorService
     private function consignmentNoteRow(Shipment $s): array
     {
         return [
-            'id' => DocumentType::ConsignmentNote->prefix() . '-' . $s->id,
+            'id' => DocumentType::ConsignmentNote->prefix().'-'.$s->id,
             'document_type' => DocumentType::ConsignmentNote->value,
             'document_type_label' => 'Consignment Note (CN)',
-            'name' => 'Consignment Note ' . ($s->waybill_number ?? ''),
+            'name' => 'Consignment Note '.($s->waybill_number ?? ''),
             'format' => 'pdf',
             'mime_type' => 'application/pdf',
             'preview_supported' => true,
@@ -614,10 +636,10 @@ class DocumentAggregatorService
     private function deliveryOrderRow(Shipment $s): array
     {
         return [
-            'id' => DocumentType::DeliveryOrder->prefix() . '-' . $s->id,
+            'id' => DocumentType::DeliveryOrder->prefix().'-'.$s->id,
             'document_type' => DocumentType::DeliveryOrder->value,
             'document_type_label' => 'Delivery Order',
-            'name' => 'Delivery Order ' . ($s->shipment_number ?? ''),
+            'name' => 'Delivery Order '.($s->shipment_number ?? ''),
             'format' => 'pdf',
             'mime_type' => 'application/pdf',
             'preview_supported' => true,
@@ -638,11 +660,12 @@ class DocumentAggregatorService
     private function podRow(Shipment $s, ShipmentTrackingPhoto $p): array
     {
         $ext = $this->extension($p->path);
+
         return [
-            'id' => DocumentType::ProofOfDelivery->prefix() . '-' . $p->id,
+            'id' => DocumentType::ProofOfDelivery->prefix().'-'.$p->id,
             'document_type' => DocumentType::ProofOfDelivery->value,
             'document_type_label' => 'Proof of Delivery (POD)',
-            'name' => $p->caption ?: ('POD ' . basename((string) $p->path)),
+            'name' => $p->caption ?: ('POD '.basename((string) $p->path)),
             'format' => $ext,
             'mime_type' => $this->mimeForExt($ext),
             'preview_supported' => $this->isPreviewSupported($p->path),
@@ -679,7 +702,7 @@ class DocumentAggregatorService
         ?string $relatedShipmentNo,
     ): array {
         return [
-            'id' => $type->prefix() . '-' . ($source['id'] ?? ''),
+            'id' => $type->prefix().'-'.($source['id'] ?? ''),
             'document_type' => $type->value,
             'document_type_label' => $this->labelFor($type),
             'name' => $name,
@@ -718,9 +741,12 @@ class DocumentAggregatorService
 
     private function cnInfo(?Shipment $s): array
     {
-        if (! $s) return [];
+        if (! $s) {
+            return [];
+        }
+
         return [
-            'document_name' => 'Consignment Note ' . ($s->waybill_number ?? ''),
+            'document_name' => 'Consignment Note '.($s->waybill_number ?? ''),
             'document_type' => 'Shipment Document',
             'booking_no' => $s->booking?->booking_number,
             'shipment_no' => $s->shipment_number,
@@ -734,7 +760,7 @@ class DocumentAggregatorService
     private function invoiceInfo(Invoice $inv, bool $isTax = false): array
     {
         return [
-            'document_name' => ($isTax ? 'Tax Invoice ' : 'Invoice ') . ($inv->invoice_number ?? '#' . $inv->id),
+            'document_name' => ($isTax ? 'Tax Invoice ' : 'Invoice ').($inv->invoice_number ?? '#'.$inv->id),
             'document_type' => $isTax ? 'Tax Invoice' : 'Invoice',
             'booking_no' => $inv->shipment?->booking?->booking_number,
             'shipment_no' => $inv->shipment?->shipment_number,
@@ -748,23 +774,28 @@ class DocumentAggregatorService
     private function receiptInfo(Payment $pay, ?Invoice $inv): array
     {
         return [
-            'document_name' => 'Payment Receipt ' . ($pay->midtrans_order_id ?? '#' . $pay->id),
+            'document_name' => 'Payment Receipt '.($pay->midtrans_order_id ?? '#'.$pay->id),
             'document_type' => 'Payment Receipt',
             'booking_no' => $inv?->shipment?->booking?->booking_number,
             'shipment_no' => $inv?->shipment?->shipment_number,
             'customer' => $inv?->company?->name,
             'uploaded_by' => 'System',
             'upload_date' => optional($pay->paid_at)->toIso8601String() ?? optional($pay->created_at)->toIso8601String(),
-            'remarks' => 'Payment via ' . ($pay->payment_type ?? 'Midtrans') . '.',
+            'remarks' => 'Payment via '.($pay->payment_type ?? 'Midtrans').'.',
         ];
     }
 
     private function extension(?string $name): ?string
     {
-        if (! $name) return null;
+        if (! $name) {
+            return null;
+        }
         $name = (string) $name;
         $pos = strrpos($name, '.');
-        if ($pos === false) return null;
+        if ($pos === false) {
+            return null;
+        }
+
         return strtolower(substr($name, $pos + 1));
     }
 
@@ -783,7 +814,10 @@ class DocumentAggregatorService
     private function isPreviewSupported(?string $name): bool
     {
         $ext = $this->extension($name);
-        if (! $ext) return false;
+        if (! $ext) {
+            return false;
+        }
+
         return in_array($ext, ['pdf', 'jpg', 'jpeg', 'png'], true);
     }
 }

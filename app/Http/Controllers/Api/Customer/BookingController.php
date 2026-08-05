@@ -3,17 +3,18 @@
 namespace App\Http\Controllers\Api\Customer;
 
 use App\Http\Controllers\Controller;
-use App\Models\Branch;
 use App\Models\Booking;
 use App\Models\BookingAttachment;
+use App\Models\Branch;
+use App\Models\CargoCategory;
 use App\Models\Invoice;
+use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Services\BookingPriceEstimateService;
 use App\Services\MidtransService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class BookingController extends Controller
 {
@@ -56,7 +57,7 @@ class BookingController extends Controller
             $query->whereDate('created_at', '<=', $request->date_to);
         }
         if ($request->filled('search')) {
-            $needle = '%' . $request->search . '%';
+            $needle = '%'.$request->search.'%';
             $query->where(function ($q) use ($needle) {
                 $q->where('booking_number', 'like', $needle)
                     ->orWhere('shipper_name', 'like', $needle)
@@ -180,12 +181,14 @@ class BookingController extends Controller
             'cargo_description' => [
                 'nullable', 'string',
                 function ($attribute, $value, $fail) use ($request, $isDraft) {
-                    if ($isDraft) return;
-                    $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
+                    if ($isDraft) {
+                        return;
+                    }
+                    $cat = CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->code === 'MIX' && empty($value)) {
                         $fail('Deskripsi barang wajib diisi untuk kategori Mixed Cargo.');
                     }
-                }
+                },
             ],
 
             'departure_date' => 'nullable|date|after_or_equal:today',
@@ -237,12 +240,14 @@ class BookingController extends Controller
             'temperature' => [
                 'nullable', 'numeric',
                 function ($attribute, $value, $fail) use ($request, $isDraft) {
-                    if ($isDraft) return;
-                    $cat = \App\Models\CargoCategory::find($request->cargo_category_id);
+                    if ($isDraft) {
+                        return;
+                    }
+                    $cat = CargoCategory::find($request->cargo_category_id);
                     if ($cat && $cat->requires_temperature && $value === null) {
                         $fail('Suhu (temperature) wajib diisi untuk kategori kargo ini.');
                     }
-                }
+                },
             ],
 
             // Per-item payload (LCL packages[] / FCL containers[])
@@ -310,7 +315,7 @@ class BookingController extends Controller
                 $errors['consignee_branch_id'][] = 'Customer Location wajib dipilih.';
             }
 
-            $serviceType = \App\Models\ServiceType::find($data['service_type_id']);
+            $serviceType = ServiceType::find($data['service_type_id']);
             $serviceCode = $serviceType?->code;
             if ($serviceCode === 'LCL') {
                 if (empty($data['packages']) || ! is_array($data['packages'])) {
@@ -796,7 +801,7 @@ class BookingController extends Controller
 
         $booking->update([
             'status' => Booking::STATUS_REJECTED,
-            'rejection_reason' => '[Customer cancel] ' . $request->reason,
+            'rejection_reason' => '[Customer cancel] '.$request->reason,
         ]);
         $booking->recordActivity(
             'cancelled',
@@ -865,7 +870,7 @@ class BookingController extends Controller
             $new->recordActivity(
                 'duplicated',
                 'Booking diduplikasi',
-                'Sumber: ' . $booking->booking_number,
+                'Sumber: '.$booking->booking_number,
                 ['source_booking_id' => $booking->id, 'source_booking_number' => $booking->booking_number],
                 $user,
             );
@@ -1030,7 +1035,7 @@ class BookingController extends Controller
 
         $shipment->trackings()->create([
             'status' => 'created',
-            'notes' => 'Shipment dibuat otomatis (pre-paid) dari booking ' . $booking->booking_number,
+            'notes' => 'Shipment dibuat otomatis (pre-paid) dari booking '.$booking->booking_number,
             'tracked_at' => now(),
             'updated_by' => $user->id,
         ]);
@@ -1077,7 +1082,7 @@ class BookingController extends Controller
             $price = (float) ($addSvc['base_price'] ?? 0);
             if ($price > 0) {
                 $invoice->items()->create([
-                    'description' => 'Layanan Tambahan: ' . ($addSvc['name'] ?? 'Unknown'),
+                    'description' => 'Layanan Tambahan: '.($addSvc['name'] ?? 'Unknown'),
                     'quantity' => 1,
                     'unit_price' => $price,
                     'total_price' => $price,

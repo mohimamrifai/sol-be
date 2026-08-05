@@ -1,10 +1,14 @@
 <?php
+
+use App\Services\BookingPriceEstimateService;
+use Illuminate\Contracts\Console\Kernel;
+
 require __DIR__.'/vendor/autoload.php';
 $app = require_once __DIR__.'/bootstrap/app.php';
-$kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel = $app->make(Kernel::class);
 $kernel->bootstrap();
 
-$svc = app(\App\Services\BookingPriceEstimateService::class);
+$svc = app(BookingPriceEstimateService::class);
 $res = $svc->estimate([
     'origin_location_id' => 1,
     'destination_location_id' => 2,

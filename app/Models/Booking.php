@@ -4,11 +4,11 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
 class Booking extends Model
@@ -21,8 +21,11 @@ class Booking extends Model
      * legacy data; new writes go through the migration that collapsed them.
      */
     public const STATUS_DRAFT = 'draft';
+
     public const STATUS_SUBMITTED = 'submitted';
+
     public const STATUS_APPROVED = 'approved';
+
     public const STATUS_REJECTED = 'rejected';
 
     public const STATUSES = [
@@ -91,7 +94,7 @@ class Booking extends Model
     {
         static::creating(function (Booking $booking) {
             if (empty($booking->booking_number)) {
-                $booking->booking_number = 'BK-' . now()->format('Ymd') . '-' . strtoupper(substr(uniqid(), -5));
+                $booking->booking_number = 'BK-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
             }
         });
     }
@@ -206,6 +209,7 @@ class Booking extends Model
         if (! in_array($this->status, [self::STATUS_DRAFT, self::STATUS_SUBMITTED], true)) {
             return false;
         }
+
         // Once a shipment exists we no longer cancel; ops handles it.
         return ! $this->shipment()->exists();
     }

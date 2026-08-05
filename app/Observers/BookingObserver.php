@@ -2,6 +2,7 @@
 
 namespace App\Observers;
 
+use App\Models\AdditionalCharge;
 use App\Models\Booking;
 
 class BookingObserver
@@ -32,26 +33,36 @@ class BookingObserver
         if ($booking->cargo_category_id && ($booking->wasRecentlyCreated || $booking->wasChanged(['cargo_category_id', 'equipment_condition']))) {
             $cat = $booking->cargoCategory;
             if ($cat) {
-                if ($cat->requires_temperature) $triggers['REF'] = true;
-                if ($cat->is_liquid) $triggers['LIQ'] = true;
-                if ($cat->is_project_cargo) $triggers['OOG'] = true;
-                if ($cat->code === 'MIX') $triggers['MIX'] = true;
+                if ($cat->requires_temperature) {
+                    $triggers['REF'] = true;
+                }
+                if ($cat->is_liquid) {
+                    $triggers['LIQ'] = true;
+                }
+                if ($cat->is_project_cargo) {
+                    $triggers['OOG'] = true;
+                }
+                if ($cat->code === 'MIX') {
+                    $triggers['MIX'] = true;
+                }
             }
             if ($booking->equipment_condition === 'RESIDUAL') {
                 $triggers['CLEAN'] = true;
             }
         }
 
-        if (empty($triggers)) return;
+        if (empty($triggers)) {
+            return;
+        }
 
-        $chargeModels = \App\Models\AdditionalCharge::whereIn('code', array_keys($triggers))->get();
-        
+        $chargeModels = AdditionalCharge::whereIn('code', array_keys($triggers))->get();
+
         foreach ($chargeModels as $cm) {
             // Attach if not already attached (regardless of auto_triggered status)
-            // This allows the initial auto-add, but if a user deletes it, 
+            // This allows the initial auto-add, but if a user deletes it,
             // it won't be re-added unless the category or condition changes again.
             $exists = $booking->additionalCharges()->where('additional_charge_id', $cm->id)->exists();
-            if (!$exists) {
+            if (! $exists) {
                 $booking->additionalCharges()->attach($cm->id, [
                     'amount' => 0,
                     'is_auto_triggered' => true,

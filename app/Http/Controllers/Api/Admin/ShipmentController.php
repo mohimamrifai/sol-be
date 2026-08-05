@@ -21,11 +21,15 @@ class ShipmentController extends Controller
             'destinationLocation:id,name,code', 'serviceType:id,name,code',
         ]);
 
-        if ($request->filled('status')) $query->where('status', $request->status);
-        if ($request->filled('company_id')) $query->where('company_id', $request->company_id);
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+        if ($request->filled('company_id')) {
+            $query->where('company_id', $request->company_id);
+        }
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where(fn($q) => $q->where('shipment_number', 'like', "%{$s}%")
+            $query->where(fn ($q) => $q->where('shipment_number', 'like', "%{$s}%")
                 ->orWhere('waybill_number', 'like', "%{$s}%"));
         }
 
@@ -71,7 +75,7 @@ class ShipmentController extends Controller
     public function updateTracking(Request $request, Shipment $shipment): JsonResponse
     {
         $statuses = config('shipment.tracking_statuses', []);
-        $statusRule = empty($statuses) ? 'required|string' : 'required|string|in:' . implode(',', $statuses);
+        $statusRule = empty($statuses) ? 'required|string' : 'required|string|in:'.implode(',', $statuses);
         $data = $request->validate([
             'status' => $statusRule,
             'notes' => 'nullable|string',
@@ -115,7 +119,7 @@ class ShipmentController extends Controller
             && ! $shipment->invoice
         ) {
             $booking = $shipment->booking;
-            
+
             // Re-calculate from booking if exists, else fallback to 0
             $baseFreight = 0.0;
             $discount = 0.0;
@@ -131,7 +135,7 @@ class ShipmentController extends Controller
                     $additionalDetail[] = ['name' => $svc->name, 'price' => $price];
                     $additionalTotal += $price;
                 }
-                
+
                 // Approximate base freight: (estimated_price - additionalTotal) / 1.11 ? No, estimated_price is before tax.
                 // Wait, in BookingController, subtotal = estimated_price (baseFreight - discount + additionalTotal).
                 // Let's assume no discount saved for now, just:
@@ -181,7 +185,7 @@ class ShipmentController extends Controller
             foreach ($additionalDetail as $addSvc) {
                 if ($addSvc['price'] > 0) {
                     $invoice->items()->create([
-                        'description' => 'Layanan Tambahan: ' . $addSvc['name'],
+                        'description' => 'Layanan Tambahan: '.$addSvc['name'],
                         'quantity' => 1,
                         'unit_price' => $addSvc['price'],
                         'total_price' => $addSvc['price'],
@@ -192,7 +196,7 @@ class ShipmentController extends Controller
             foreach ($shipmentChargesDetail as $charge) {
                 if ($charge['price'] > 0) {
                     $invoice->items()->create([
-                        'description' => 'Biaya Tambahan (Shipment): ' . $charge['name'],
+                        'description' => 'Biaya Tambahan (Shipment): '.$charge['name'],
                         'quantity' => 1,
                         'unit_price' => $charge['price'],
                         'total_price' => $charge['price'],
@@ -249,6 +253,7 @@ class ShipmentController extends Controller
     public function destroyContainer(Container $container): JsonResponse
     {
         $container->delete();
+
         return response()->json(['message' => 'Container dihapus.']);
     }
 
@@ -284,6 +289,7 @@ class ShipmentController extends Controller
     public function destroyRack(Rack $rack): JsonResponse
     {
         $rack->delete();
+
         return response()->json(['message' => 'Rack dihapus.']);
     }
 
@@ -334,6 +340,7 @@ class ShipmentController extends Controller
     public function destroyItem(ShipmentItem $item): JsonResponse
     {
         $item->delete();
+
         return response()->json(['message' => 'Item dihapus.']);
     }
 
@@ -347,7 +354,7 @@ class ShipmentController extends Controller
 
         $pdf = Pdf::loadView('pdf.consignment-note', ['shipment' => $shipment]);
 
-        return $pdf->download('consignment-note-' . $shipment->waybill_number . '.pdf');
+        return $pdf->download('consignment-note-'.$shipment->waybill_number.'.pdf');
     }
 
     public function downloadWaybillPdf(Shipment $shipment)
@@ -359,6 +366,6 @@ class ShipmentController extends Controller
 
         $pdf = Pdf::loadView('pdf.waybill', ['shipment' => $shipment]);
 
-        return $pdf->download('waybill-' . $shipment->waybill_number . '.pdf');
+        return $pdf->download('waybill-'.$shipment->waybill_number.'.pdf');
     }
 }

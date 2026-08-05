@@ -32,11 +32,13 @@ class MidtransWebhookController extends Controller
                 'has_signature_key' => isset($payload['signature_key']),
                 'remote_ip' => $request->ip(),
             ]);
+
             // Still 200 — never 4xx on a Midtrans callback, or they retry.
             return response()->json(['message' => 'OK']);
         }
 
         $this->midtransService->handleNotification($payload);
+
         return response()->json(['message' => 'OK']);
     }
 }

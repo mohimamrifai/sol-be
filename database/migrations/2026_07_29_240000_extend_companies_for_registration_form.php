@@ -44,7 +44,7 @@ return new class extends Migration
         // We widen it to accommodate new values like 'Perorangan' and 'Lainnya'.
         // (Lainnya is a UI sentinel — the free text lives in business_entity_other.)
         if (DB::getDriverName() !== 'sqlite') {
-        DB::statement("ALTER TABLE companies MODIFY COLUMN business_entity_type VARCHAR(30) NULL");
+            DB::statement('ALTER TABLE companies MODIFY COLUMN business_entity_type VARCHAR(30) NULL');
         }
     }
 

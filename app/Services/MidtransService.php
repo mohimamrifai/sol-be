@@ -30,7 +30,7 @@ class MidtransService
             throw new \InvalidArgumentException('Jumlah pembayaran tidak valid.');
         }
 
-        $orderId = 'INV-' . $invoice->id . '-' . Str::random(6);
+        $orderId = 'INV-'.$invoice->id.'-'.Str::random(6);
         $grossAmount = (int) round($amount);
 
         $payload = [
@@ -46,10 +46,10 @@ class MidtransService
             ],
             'item_details' => [
                 [
-                    'id' => 'invoice-' . $invoice->id,
+                    'id' => 'invoice-'.$invoice->id,
                     'price' => $grossAmount,
                     'quantity' => 1,
-                    'name' => 'Invoice ' . $invoice->invoice_number,
+                    'name' => 'Invoice '.$invoice->invoice_number,
                 ],
             ],
         ];
@@ -64,7 +64,7 @@ class MidtransService
                 'amount' => $grossAmount,
                 'error' => $e->getMessage(),
             ]);
-            throw new \RuntimeException('Gagal menghubungi Midtrans: ' . $e->getMessage(), 0, $e);
+            throw new \RuntimeException('Gagal menghubungi Midtrans: '.$e->getMessage(), 0, $e);
         }
 
         if (! $response->successful()) {
@@ -76,7 +76,7 @@ class MidtransService
                 'error_messages' => $response->json('error_messages'),
             ]);
             throw new \RuntimeException(
-                'Midtrans API error: ' . ($response->json('error_messages.0') ?? $response->body())
+                'Midtrans API error: '.($response->json('error_messages.0') ?? $response->body())
             );
         }
 
@@ -136,7 +136,7 @@ class MidtransService
             return false;
         }
 
-        $expected = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
+        $expected = hash('sha512', $orderId.$statusCode.$grossAmount.$serverKey);
 
         return hash_equals($expected, $signatureKey);
     }
@@ -166,6 +166,7 @@ class MidtransService
             Log::warning(self::NOTIFICATION_ORDER_NOT_FOUND_LOG, [
                 'order_id' => $orderId,
             ]);
+
             return;
         }
 
@@ -201,7 +202,7 @@ class MidtransService
                 ?? $response->json('error_messages.0')
                 ?? $response->body();
 
-            throw new \RuntimeException('Midtrans status API: ' . $msg);
+            throw new \RuntimeException('Midtrans status API: '.$msg);
         }
 
         $body = $response->json();
@@ -252,6 +253,7 @@ class MidtransService
             $payment->forceFill([
                 'midtrans_response' => array_merge($payment->midtrans_response ?? [], $payload),
             ])->save();
+
             return;
         }
 

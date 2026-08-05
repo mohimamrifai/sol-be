@@ -16,8 +16,8 @@ return new class extends Migration
         // Backfill codes for mandatory seeded services so they are stable identifiers.
         $codes = [
             'Free Storage 5 Hari (Origin & Destination)' => 'FREE_STORAGE_FCL',
-            'LOLO (Lift On-Lift Off)'                    => 'LOLO',
-            'Container Rent'                             => 'CONTAINER_RENT',
+            'LOLO (Lift On-Lift Off)' => 'LOLO',
+            'Container Rent' => 'CONTAINER_RENT',
             'Free Storage 1 Hari (Origin & Destination)' => 'FREE_STORAGE_LCL',
         ];
 

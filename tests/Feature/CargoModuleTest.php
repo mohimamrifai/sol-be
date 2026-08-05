@@ -2,6 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Models\AdditionalCharge;
+use App\Models\Booking;
+use App\Models\CargoCategory;
+use App\Models\Company;
+use App\Models\Location;
+use App\Models\ServiceType;
+use App\Models\TransportMode;
+use App\Models\User;
+use Database\Seeders\MasterDataSeeder;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\TestCase;
@@ -14,22 +24,22 @@ class CargoModuleTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\RolesAndPermissionsSeeder::class);
-        $this->seed(\Database\Seeders\MasterDataSeeder::class);
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $this->seed(MasterDataSeeder::class);
     }
 
     public function test_residual_equipment_condition_sets_dangerous_goods_to_true()
     {
-        $company = \App\Models\Company::create(['name' => 'Test Co', 'status' => 'active']);
-        $user = \App\Models\User::factory()->create(['company_id' => $company->id]);
-        
-        $origin = \App\Models\Location::first();
-        $dest = \App\Models\Location::skip(1)->first();
-        $mode = \App\Models\TransportMode::first();
-        $service = \App\Models\ServiceType::first();
-        $category = \App\Models\CargoCategory::first();
+        $company = Company::create(['name' => 'Test Co', 'status' => 'active']);
+        $user = User::factory()->create(['company_id' => $company->id]);
 
-        $booking = \App\Models\Booking::create([
+        $origin = Location::first();
+        $dest = Location::skip(1)->first();
+        $mode = TransportMode::first();
+        $service = ServiceType::first();
+        $category = CargoCategory::first();
+
+        $booking = Booking::create([
             'booking_number' => 'TEST-001',
             'company_id' => $company->id,
             'user_id' => $user->id,
@@ -53,16 +63,29 @@ class CargoModuleTest extends TestCase
 
     public function test_cargo_category_flags_trigger_additional_charges()
     {
-        $company = \App\Models\Company::create(['name' => 'Test Co 2', 'status' => 'active']);
-        $user = \App\Models\User::factory()->create(['company_id' => $company->id]);
-        
-        $origin = \App\Models\Location::first();
-        $dest = \App\Models\Location::skip(1)->first();
-        $mode = \App\Models\TransportMode::first();
-        $service = \App\Models\ServiceType::first();
-        $category = \App\Models\CargoCategory::where('code', 'REF')->first();
-        
-        $booking = \App\Models\Booking::create([
+        $company = Company::create(['name' => 'Test Co 2', 'status' => 'active']);
+        $user = User::factory()->create(['company_id' => $company->id]);
+
+        $origin = Location::first();
+        $dest = Location::skip(1)->first();
+        $mode = TransportMode::first();
+        $service = ServiceType::first();
+        $category = CargoCategory::where('requires_temperature', true)->first()
+            ?? CargoCategory::create([
+                'name' => 'Refrigerated',
+                'code' => 'REF',
+                'requires_temperature' => true,
+                'is_active' => true,
+            ]);
+
+        AdditionalCharge::firstOrCreate([
+            'code' => 'REF',
+        ], [
+            'name' => 'Refrigerated',
+            'is_active' => true,
+        ]);
+
+        $booking = Booking::create([
             'booking_number' => 'TEST-002',
             'company_id' => $company->id,
             'user_id' => $user->id,

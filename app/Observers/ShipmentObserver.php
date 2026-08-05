@@ -2,11 +2,12 @@
 
 namespace App\Observers;
 
+use App\Models\AdditionalCharge;
 use App\Models\Shipment;
 
 class ShipmentObserver
 {
-    public function saving(\App\Models\Shipment $shipment): void
+    public function saving(Shipment $shipment): void
     {
         // Rule: Residual always leads to DG
         if ($shipment->equipment_condition === 'RESIDUAL') {
@@ -14,7 +15,7 @@ class ShipmentObserver
         }
     }
 
-    public function saved(\App\Models\Shipment $shipment): void
+    public function saved(Shipment $shipment): void
     {
         $this->syncAutoCharges($shipment);
     }
@@ -32,23 +33,33 @@ class ShipmentObserver
         if ($shipment->cargo_category_id && ($shipment->wasRecentlyCreated || $shipment->wasChanged(['cargo_category_id', 'equipment_condition']))) {
             $cat = $shipment->cargoCategory;
             if ($cat) {
-                if ($cat->requires_temperature) $triggers['REF'] = true;
-                if ($cat->is_liquid) $triggers['LIQ'] = true;
-                if ($cat->is_project_cargo) $triggers['OOG'] = true;
-                if ($cat->code === 'MIX') $triggers['MIX'] = true;
+                if ($cat->requires_temperature) {
+                    $triggers['REF'] = true;
+                }
+                if ($cat->is_liquid) {
+                    $triggers['LIQ'] = true;
+                }
+                if ($cat->is_project_cargo) {
+                    $triggers['OOG'] = true;
+                }
+                if ($cat->code === 'MIX') {
+                    $triggers['MIX'] = true;
+                }
             }
             if ($shipment->equipment_condition === 'RESIDUAL') {
                 $triggers['CLEAN'] = true;
             }
         }
 
-        if (empty($triggers)) return;
+        if (empty($triggers)) {
+            return;
+        }
 
-        $chargeModels = \App\Models\AdditionalCharge::whereIn('code', array_keys($triggers))->get();
-        
+        $chargeModels = AdditionalCharge::whereIn('code', array_keys($triggers))->get();
+
         foreach ($chargeModels as $cm) {
             $exists = $shipment->additionalCharges()->where('additional_charge_id', $cm->id)->exists();
-            if (!$exists) {
+            if (! $exists) {
                 $shipment->additionalCharges()->attach($cm->id, [
                     'amount' => 0,
                     'is_auto_triggered' => true,

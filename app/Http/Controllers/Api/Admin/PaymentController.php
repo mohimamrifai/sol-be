@@ -46,6 +46,7 @@ class PaymentController extends Controller
     public function show(Payment $payment): JsonResponse
     {
         $payment->load(['invoice.company', 'invoice.shipment']);
+
         return response()->json(['data' => $payment]);
     }
 

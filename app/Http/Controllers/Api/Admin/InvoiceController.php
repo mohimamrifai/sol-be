@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
-use App\Models\InvoiceItem;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,7 +26,9 @@ class InvoiceController extends Controller
                 $query->where('status', $st);
             }
         }
-        if ($request->filled('company_id')) $query->where('company_id', $request->company_id);
+        if ($request->filled('company_id')) {
+            $query->where('company_id', $request->company_id);
+        }
         if ($request->filled('search')) {
             $s = $request->search;
             $query->where('invoice_number', 'like', "%{$s}%");
@@ -102,7 +103,7 @@ class InvoiceController extends Controller
         ]);
 
         $paymentTerms = $invoice->company?->postpaid_term_days !== null
-            ? ((string) $invoice->company->postpaid_term_days . ' days')
+            ? ((string) $invoice->company->postpaid_term_days.' days')
             : null;
 
         $invoice->update([
@@ -170,6 +171,6 @@ class InvoiceController extends Controller
 
         $pdf = Pdf::loadView('pdf.invoice', ['invoice' => $invoice]);
 
-        return $pdf->download('invoice-' . $invoice->invoice_number . '.pdf');
+        return $pdf->download('invoice-'.$invoice->invoice_number.'.pdf');
     }
 }

@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Api\Customer;
 
 use App\Http\Controllers\Controller;
-use App\Models\InvoiceActivity;
 use App\Models\Invoice;
+use App\Models\InvoiceActivity;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -214,7 +214,7 @@ class InvoiceController extends Controller
 
         $customerName = $companySnapshot['name'] ?? $invoice->company?->name;
         $paymentTerms = $companySnapshot['payment_terms']
-            ?? (($invoice->company?->postpaid_term_days ?? null) !== null ? ((string) $invoice->company->postpaid_term_days . ' days') : null);
+            ?? (($invoice->company?->postpaid_term_days ?? null) !== null ? ((string) $invoice->company->postpaid_term_days.' days') : null);
 
         $shipmentNo = $shipmentSnapshot['shipment_no'] ?? $invoice->shipment?->shipment_number;
         $bookingNo = $shipmentSnapshot['booking_no'] ?? $invoice->shipment?->booking?->booking_number;
@@ -236,8 +236,8 @@ class InvoiceController extends Controller
                 'key' => 'tax_invoice',
                 'label' => 'Tax Invoice',
                 'available' => $invoice->status === 'paid',
-                'view_path' => "/customer/documents/" . rawurlencode("tinv-{$invoice->id}") . '/preview',
-                'download_path' => "/customer/documents/" . rawurlencode("tinv-{$invoice->id}") . '/download',
+                'view_path' => '/customer/documents/'.rawurlencode("tinv-{$invoice->id}").'/preview',
+                'download_path' => '/customer/documents/'.rawurlencode("tinv-{$invoice->id}").'/download',
             ],
             [
                 'key' => 'supporting',
@@ -278,7 +278,7 @@ class InvoiceController extends Controller
             if (in_array($p->status, ['success', 'settlement'], true)) {
                 $timeline->push([
                     'occurred_at' => ($p->paid_at ?? $p->created_at)?->toIso8601String(),
-                    'activity' => 'Pembayaran Rp' . number_format((float) $p->amount, 0, ',', '.') . ' diterima',
+                    'activity' => 'Pembayaran Rp'.number_format((float) $p->amount, 0, ',', '.').' diterima',
                 ]);
             }
         }
@@ -318,7 +318,7 @@ class InvoiceController extends Controller
                     'shipment_no' => $shipmentNo,
                     'booking_no' => $bookingNo,
                     'cn_no' => $cnNo,
-                    'route' => ($routeOrigin && $routeDestination) ? ($routeOrigin . ' → ' . $routeDestination) : null,
+                    'route' => ($routeOrigin && $routeDestination) ? ($routeOrigin.' → '.$routeDestination) : null,
                     'service_type' => $serviceType,
                     'shipment_coverage' => $shipmentCoverage,
                 ],
@@ -366,6 +366,6 @@ class InvoiceController extends Controller
 
         $pdf = Pdf::loadView('pdf.invoice', ['invoice' => $invoice]);
 
-        return $pdf->download('invoice-' . $invoice->invoice_number . '.pdf');
+        return $pdf->download('invoice-'.$invoice->invoice_number.'.pdf');
     }
 }

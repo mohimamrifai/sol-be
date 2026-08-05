@@ -2,6 +2,13 @@
 
 namespace App\Providers;
 
+use App\Listeners\UpdateLastLoginAt;
+use App\Models\Booking;
+use App\Models\Shipment;
+use App\Observers\BookingObserver;
+use App\Observers\ShipmentObserver;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,7 +26,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        \App\Models\Booking::observe(\App\Observers\BookingObserver::class);
-        \App\Models\Shipment::observe(\App\Observers\ShipmentObserver::class);
+        Booking::observe(BookingObserver::class);
+        Shipment::observe(ShipmentObserver::class);
+
+        Event::listen(Login::class, UpdateLastLoginAt::class);
     }
 }

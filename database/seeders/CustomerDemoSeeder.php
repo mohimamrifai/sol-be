@@ -2,36 +2,49 @@
 
 namespace Database\Seeders;
 
+use App\Enums\CompanyDocumentType;
+use App\Enums\LocationStatus;
+use App\Enums\LocationType;
+use App\Enums\UserRole;
+use App\Enums\UserStatus;
 use App\Models\Booking;
 use App\Models\BookingActivity;
 use App\Models\BookingAttachment;
 use App\Models\Branch;
 use App\Models\CargoCategory;
 use App\Models\Company;
+use App\Models\CompanyActivity;
+use App\Models\CompanyDocument;
 use App\Models\ContainerType;
+use App\Models\CustomerLocation;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\InvoiceItem;
 use App\Models\Location;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
-use App\Models\PaymentProofAttachment;
 use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
 use App\Models\ShipmentTracking;
 use App\Models\TransportMode;
 use App\Models\User;
+use App\Services\LocationCodeService;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 /**
  * Customer Demo Seeder
  *
- * Menghasilkan data demo untuk role customer (company_admin, ops_pic, finance_pic)
+ * Menghasilkan data demo untuk role customer (company_admin, ops_pic, finance_pic, viewer)
  * dengan cakupan semua status & state penting pada modul:
+ *  - Company Profile (info + commercial + documents + activities)
+ *  - Locations (head office, branch, warehouse, dengan activities)
+ *  - Users (admin, ops, finance, viewer)
  *  - Bookings   (draft, submitted, approved, rejected)
  *  - Shipments  (planning, in_progress, completed, cancelled)
  *  - Documents  (booking attachment, CN, DO, POD, invoice, tax invoice, payment receipt)
@@ -40,9 +53,10 @@ use Illuminate\Support\Facades\Schema;
  * Strategi: TRUNCATE + seed ulang. Idempotent (aman dipanggil berulang).
  *
  * Akun demo (password: "password"):
- *  - admin@customer.test  → company_admin
- *  - ops@customer.test    → ops_pic
+ *  - admin@customer.test   → company_admin
+ *  - ops@customer.test     → ops_pic
  *  - finance@customer.test → finance_pic
+ *  - viewer@customer.test  → viewer (read-only)
  *
  * Perusahaan: PT ABC Indonesia (satu company utama; 1 company pembanding tanpa PIC
  * untuk menguji filter company_id).
@@ -58,17 +72,28 @@ class CustomerDemoSeeder extends Seeder
         $mainCompany = $this->seedMainCompany();
         $this->seedSecondaryCompany();
 
-        $admin = $this->seedUser($mainCompany, 'admin@customer.test', 'Demo Company Admin', 'company_admin');
-        $ops = $this->seedUser($mainCompany, 'ops@customer.test', 'Demo Ops PIC', 'ops_pic');
-        $finance = $this->seedUser($mainCompany, 'finance@customer.test', 'Demo Finance PIC', 'finance_pic');
+        $admin = $this->seedUser($mainCompany, 'admin@customer.test', 'Demo Company Admin', UserRole::CompanyAdmin);
+        $ops = $this->seedUser($mainCompany, 'ops@customer.test', 'Demo Ops PIC', UserRole::OpsPic);
+        $finance = $this->seedUser($mainCompany, 'finance@customer.test', 'Demo Finance PIC', UserRole::FinancePic);
+        $viewer = $this->seedUser($mainCompany, 'viewer@customer.test', 'Demo Viewer', UserRole::Viewer);
+        $inactive = $this->seedUser($mainCompany, 'former@customer.test', 'Demo Former PIC', UserRole::OpsPic, UserStatus::Inactive);
 
-        $customerUsers = collect([$admin, $ops, $finance]);
+        $customerUsers = collect([$admin, $ops, $finance, $viewer, $inactive]);
+
+        $locations = $this->seedLocations($mainCompany, $admin);
+        $this->syncLocationAccess($admin, $locations->pluck('id')->all());
+        $this->syncLocationAccess($ops, $locations->pluck('id')->all());
+        $this->syncLocationAccess($finance, $locations->pluck('id')->all());
+        $this->syncLocationAccess($viewer, $locations->pluck('id')->all());
+
+        $this->seedCompanyDocuments($mainCompany, $admin);
+        $this->seedCompanyActivities($mainCompany, $admin, $locations);
 
         $bookings = $this->seedBookings($mainCompany, $customerUsers);
         $this->seedShipments($bookings, $customerUsers);
         $this->seedInvoices($bookings, $customerUsers);
 
-        $this->command?->info('Customer demo data seeded: 1 main company + 3 PIC users.');
+        $this->command?->info('Customer demo data seeded: 1 main company + 4 PIC users + 4 locations + 2 documents + activities.');
     }
 
     private function truncateCustomerData(): void
@@ -93,6 +118,12 @@ class CustomerDemoSeeder extends Seeder
             'bookings',
             'customer_discounts',
             'branches',
+            'company_activities',
+            'company_documents',
+            'user_location_access',
+            'customer_locations',
+            'model_has_roles',
+            'model_has_permissions',
             'users',
             'companies',
         ];
@@ -115,17 +146,27 @@ class CustomerDemoSeeder extends Seeder
             'npwp' => '01.234.567.8-901.000',
             'nib' => '9120000012345',
             'address' => 'Jl. Sudirman Kav. 45',
-            'city' => 'Jakarta',
+            'city' => 'Kota Jakarta Selatan',
             'province' => 'DKI Jakarta',
             'country' => 'Indonesia',
+            'district' => 'Kebayoran Baru',
             'postal_code' => '12190',
             'business_category' => 'manufacturing',
             'business_category_other' => 'Manufaktur',
+            'monthly_shipment_estimate' => '50_to_100',
+            'website' => 'https://www.abc-indonesia.co.id',
             'contact_person' => 'Andi Wijaya',
             'email' => 'finance@abc-indonesia.co.id',
             'phone' => '021-555-0188',
             'status' => 'active',
+            'billing_type' => 'postpaid',
+            'pricing_type' => 'standard',
+            'discount_percent' => 5.00,
             'billing_cycle' => 'end_of_month',
+            'payment_term' => 'net_14',
+            'credit_limit' => 50000000,
+            'current_deposit_balance' => 2500000,
+            'outstanding_balance' => 0,
             'payment_type' => 'postpaid',
             'postpaid_term_days' => 14,
             'manual_payment_enabled' => true,
@@ -144,39 +185,222 @@ class CustomerDemoSeeder extends Seeder
             'npwp' => '02.345.678.9-012.000',
             'nib' => '9120000098765',
             'address' => 'Jl. Asia Afrika No. 100',
-            'city' => 'Bandung',
+            'city' => 'Kota Bandung',
             'province' => 'Jawa Barat',
             'country' => 'Indonesia',
+            'district' => 'Coblong',
             'postal_code' => '40112',
             'business_category' => 'distributor',
             'business_category_other' => 'Distribusi',
+            'monthly_shipment_estimate' => '10_to_50',
+            'website' => 'https://www.sembilan-jaya.co.id',
             'contact_person' => 'Rina Kartika',
             'email' => 'finance@sembilan-jaya.co.id',
             'phone' => '022-555-9911',
             'status' => 'active',
+            'billing_type' => 'prepaid',
+            'pricing_type' => 'discount',
+            'discount_percent' => 2.50,
             'billing_cycle' => 'half_monthly_1',
+            'payment_term' => 'cod',
+            'credit_limit' => 0,
+            'current_deposit_balance' => 1000000,
+            'outstanding_balance' => 0,
             'payment_type' => 'postpaid',
             'postpaid_term_days' => 30,
+            'manual_payment_enabled' => true,
+            'bank_name' => 'Mandiri',
+            'bank_account_number' => '987-654-3210',
+            'bank_account_name' => 'PT Sembilan Jaya',
         ]);
     }
 
-    private function seedUser(Company $company, string $email, string $name, string $role): User
+    private function seedUser(Company $company, string $email, string $name, UserRole $role, UserStatus $status = UserStatus::Active): User
     {
         $user = User::create([
             'name' => $name,
             'email' => $email,
             'password' => bcrypt(self::PASSWORD),
             'phone' => '0812'.str_pad((string) (random_int(1000000, 9999999)), 7, '0', STR_PAD_LEFT),
-            'status' => 'active',
+            'status' => $status,
             'user_type' => 'customer',
             'company_id' => $company->id,
+            'last_login_at' => $role === UserRole::CompanyAdmin ? now() : null,
+            'feature_access' => $role->defaultFeatureAccess(),
         ]);
-        $user->syncRoles([$role]);
+        $user->syncRoles([$role->value]);
 
         return $user;
     }
 
-    private function seedBookings(Company $company, $customerUsers): \Illuminate\Support\Collection
+    private function seedLocations(Company $company, User $actor): Collection
+    {
+        $service = app(LocationCodeService::class);
+        $data = [
+            [
+                'type' => LocationType::HeadOffice,
+                'name' => 'PT ABC Indonesia — Head Office Jakarta',
+                'phone' => '021-555-0188',
+                'country' => 'Indonesia',
+                'province' => 'DKI Jakarta',
+                'city' => 'Kota Jakarta Selatan',
+                'district' => 'Kebayoran Baru',
+                'postal_code' => '12190',
+                'address' => 'Jl. Sudirman Kav. 45, Kebayoran Baru 12190',
+                'pic_name' => 'Andi Wijaya',
+                'pic_email' => 'andi.wijaya@abc-indonesia.co.id',
+                'pic_mobile' => '0812-3456-7890',
+            ],
+            [
+                'type' => LocationType::BranchOffice,
+                'name' => 'PT ABC Indonesia — Branch Office Surabaya',
+                'phone' => '031-555-1010',
+                'country' => 'Indonesia',
+                'province' => 'Jawa Timur',
+                'city' => 'Kota Surabaya',
+                'district' => 'Genteng',
+                'postal_code' => '60275',
+                'address' => 'Jl. Tunjungan No. 88, Genteng 60275',
+                'pic_name' => 'Budi Santoso',
+                'pic_email' => 'budi.santoso@abc-indonesia.co.id',
+                'pic_mobile' => '0813-1234-5678',
+            ],
+            [
+                'type' => LocationType::BranchOffice,
+                'name' => 'PT ABC Indonesia — Branch Office Medan',
+                'phone' => '061-555-2020',
+                'country' => 'Indonesia',
+                'province' => 'Sumatera Utara',
+                'city' => 'Kota Medan',
+                'district' => 'Medan Polonia',
+                'postal_code' => '20157',
+                'address' => 'Jl. Gatot Subroto No. 99, Medan Polonia 20157',
+                'pic_name' => 'Citra Lestari',
+                'pic_email' => 'citra.lestari@abc-indonesia.co.id',
+                'pic_mobile' => '0814-9876-5432',
+            ],
+            [
+                'type' => LocationType::Warehouse,
+                'name' => 'PT ABC Indonesia — Warehouse Bandung',
+                'phone' => '022-555-3030',
+                'country' => 'Indonesia',
+                'province' => 'Jawa Barat',
+                'city' => 'Kota Bandung',
+                'district' => 'Cibiru',
+                'postal_code' => '40614',
+                'address' => 'Jl. Raya Cibiru No. 12, Cibiru 40614',
+                'pic_name' => 'Dedi Kurniawan',
+                'pic_email' => 'dedi.kurniawan@abc-indonesia.co.id',
+                'pic_mobile' => '0815-5555-1234',
+            ],
+        ];
+
+        $locations = collect();
+        $statusForIndex = [LocationStatus::Active, LocationStatus::Active, LocationStatus::Active, LocationStatus::Inactive];
+        foreach ($data as $idx => $row) {
+            $row['company_id'] = $company->id;
+            $row['code'] = $service->next($company->id);
+            $row['status'] = $statusForIndex[$idx] ?? LocationStatus::Active;
+            $location = CustomerLocation::create($row);
+
+            CompanyActivity::create([
+                'subject_type' => CustomerLocation::class,
+                'subject_id' => $location->id,
+                'event_key' => 'location_created',
+                'description' => 'Location dibuat.',
+                'meta' => ['code' => $location->code, 'name' => $location->name, 'type' => $location->type->value],
+                'actor_user_id' => $actor->id,
+                'occurred_at' => $location->created_at,
+            ]);
+
+            $locations->push($location);
+        }
+
+        return $locations;
+    }
+
+    private function syncLocationAccess(User $user, array $locationIds): void
+    {
+        $user->locationAccess()->sync($locationIds);
+    }
+
+    private function seedCompanyDocuments(Company $company, User $actor): void
+    {
+        $basePath = storage_path('app/private/company-documents/'.$company->id);
+        if (! is_dir($basePath)) {
+            @mkdir($basePath, 0755, true);
+        }
+
+        $documents = [
+            [
+                'type' => CompanyDocumentType::Npwp,
+                'label' => 'NPWP PT ABC Indonesia',
+                'content' => "DUMMY NPWP\nPT ABC Indonesia\n01.234.567.8-901.000\n",
+            ],
+            [
+                'type' => CompanyDocumentType::Nib,
+                'label' => 'NIB PT ABC Indonesia',
+                'content' => "DUMMY NIB\nPT ABC Indonesia\n9120000012345\n",
+            ],
+        ];
+
+        foreach ($documents as $doc) {
+            $typeDir = $basePath.'/'.$doc['type']->value;
+            if (! is_dir($typeDir)) {
+                @mkdir($typeDir, 0755, true);
+            }
+            $filename = Str::uuid()->toString().'.txt';
+            $relativePath = "company-documents/{$company->id}/{$doc['type']->value}/{$filename}";
+            $absolutePath = storage_path('app/private/'.$relativePath);
+            file_put_contents($absolutePath, $doc['content']);
+
+            $document = CompanyDocument::create([
+                'company_id' => $company->id,
+                'type' => $doc['type']->value,
+                'label' => $doc['label'],
+                'file_path' => $relativePath,
+                'file_name' => $filename,
+                'file_size' => strlen($doc['content']),
+                'mime_type' => 'text/plain',
+                'uploaded_by_user_id' => $actor->id,
+            ]);
+
+            CompanyActivity::create([
+                'subject_type' => Company::class,
+                'subject_id' => $company->id,
+                'event_key' => 'company_document_uploaded',
+                'description' => 'Dokumen '.strtoupper($doc['type']->value).' diunggah.',
+                'meta' => ['document_id' => $document->id, 'type' => $doc['type']->value],
+                'actor_user_id' => $actor->id,
+                'occurred_at' => $document->created_at,
+            ]);
+        }
+    }
+
+    private function seedCompanyActivities(Company $company, User $actor, Collection $locations): void
+    {
+        CompanyActivity::create([
+            'subject_type' => Company::class,
+            'subject_id' => $company->id,
+            'event_key' => 'company_created',
+            'description' => 'Perusahaan dibuat.',
+            'meta' => ['name' => $company->name, 'company_code' => $company->company_code],
+            'actor_user_id' => $actor->id,
+            'occurred_at' => $company->created_at,
+        ]);
+
+        CompanyActivity::create([
+            'subject_type' => Company::class,
+            'subject_id' => $company->id,
+            'event_key' => 'company_profile_updated',
+            'description' => 'Profile perusahaan diperbarui.',
+            'meta' => ['changes' => ['address' => 'Jl. Sudirman Kav. 45']],
+            'actor_user_id' => $actor->id,
+            'occurred_at' => now()->subDays(2),
+        ]);
+    }
+
+    private function seedBookings(Company $company, $customerUsers): Collection
     {
         $locations = Location::orderBy('id')->get();
         $modes = TransportMode::orderBy('id')->get();
@@ -409,7 +633,7 @@ class CustomerDemoSeeder extends Seeder
         return $booking;
     }
 
-    private function seedShipments(\Illuminate\Support\Collection $bookings, $customerUsers): void
+    private function seedShipments(Collection $bookings, $customerUsers): void
     {
         $approved = $bookings->filter(fn (Booking $b) => $b->status === Booking::STATUS_APPROVED)->values();
 
@@ -559,7 +783,7 @@ class CustomerDemoSeeder extends Seeder
         }
     }
 
-    private function seedInvoices(\Illuminate\Support\Collection $bookings, $customerUsers): void
+    private function seedInvoices(Collection $bookings, $customerUsers): void
     {
         $approved = $bookings->filter(fn (Booking $b) => $b->status === Booking::STATUS_APPROVED)->values();
         $shipments = Shipment::with('booking')->get()->keyBy('booking_id');
@@ -754,8 +978,8 @@ class CustomerDemoSeeder extends Seeder
         string $status,
         ?string $paymentType,
         string $method,
-        ?\Carbon\Carbon $paidAt = null,
-        ?\Carbon\Carbon $expiredAt = null,
+        ?Carbon $paidAt = null,
+        ?Carbon $expiredAt = null,
         string $manualStatus = Payment::MANUAL_UNSUBMITTED,
         array $manualMeta = []
     ): Payment {
@@ -818,7 +1042,7 @@ class CustomerDemoSeeder extends Seeder
         ?User $actor,
         string $eventKey,
         string $description,
-        \Carbon\Carbon $occurredAt,
+        Carbon $occurredAt,
         array $meta = []
     ): void {
         if (! Schema::hasTable('payment_activities')) {

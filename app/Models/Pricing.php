@@ -48,6 +48,7 @@ class Pricing extends Model
     public function scopeCurrentlyEffective($query)
     {
         $today = now()->toDateString();
+
         return $query->where(function ($q) use ($today) {
             $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today);
         })->where(function ($q) use ($today) {

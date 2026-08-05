@@ -12,22 +12,35 @@ class Payment extends Model
     use HasFactory;
 
     public const STATUS_PENDING = 'pending';
+
     public const STATUS_SUCCESS = 'success';
+
     public const STATUS_SETTLEMENT = 'settlement';
+
     public const STATUS_FAILED = 'failed';
+
     public const STATUS_EXPIRED = 'expired';
+
     public const STATUS_CANCELLED = 'cancelled';
+
     public const STATUS_REFUNDED = 'refunded';
 
     public const METHOD_MIDTRANS = 'midtrans';
+
     public const METHOD_TRANSFER = 'transfer';
+
     public const METHOD_GIRO = 'giro';
+
     public const METHOD_CASH = 'cash';
+
     public const METHOD_VIRTUAL_ACCOUNT = 'virtual_account';
 
     public const MANUAL_UNSUBMITTED = 'unsubmitted';
+
     public const MANUAL_SUBMITTED = 'submitted';
+
     public const MANUAL_VERIFIED = 'verified';
+
     public const MANUAL_REJECTED = 'rejected';
 
     protected $fillable = [

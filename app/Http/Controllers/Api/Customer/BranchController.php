@@ -22,4 +22,3 @@ class BranchController extends Controller
         return response()->json(['data' => $data]);
     }
 }
-

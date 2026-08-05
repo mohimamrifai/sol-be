@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -22,7 +21,7 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $user = User::with(['company'])->where('email', $request->email)->first();
+        $user = User::with(['company', 'roles', 'locationAccess:id,code,name,type,status'])->where('email', $request->email)->first();
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
@@ -30,7 +29,7 @@ class AuthController extends Controller
             ]);
         }
 
-        if ($user->status !== 'active') {
+        if (! $user->isActive()) {
             throw ValidationException::withMessages([
                 'email' => ['Akun Anda belum aktif atau telah dinonaktifkan.'],
             ]);
@@ -41,7 +40,7 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Login berhasil.',
             'data' => [
-                'user' => $this->formatUser($user),
+                'user' => $this->formatUser($user, $request),
                 'token' => $token,
             ],
         ]);
@@ -62,10 +61,10 @@ class AuthController extends Controller
      */
     public function profile(Request $request): JsonResponse
     {
-        $user = $request->user()->load(['company', 'roles']);
+        $user = $request->user()->load(['company', 'roles', 'locationAccess:id,code,name,type,status']);
 
         return response()->json([
-            'data' => $this->formatUser($user),
+            'data' => $this->formatUser($user, $request),
         ]);
     }
 
@@ -90,12 +89,20 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Profil berhasil diperbarui.',
-            'data' => $this->formatUser($user->fresh()),
+            'data' => $this->formatUser($user->fresh(), $request),
         ]);
     }
 
-    private function formatUser(User $user): array
+    private function formatUser(User $user, ?Request $request = null): array
     {
+        $base = $request?->getSchemeAndHttpHost();
+        $photoUrl = null;
+        if ($user->profile_photo_path) {
+            $photoUrl = ($base ?? config('app.url')).'/storage/'.$user->profile_photo_path;
+        }
+
+        $locationAccess = $user->relationLoaded('locationAccess') ? $user->locationAccess : null;
+
         return [
             'id' => $user->id,
             'name' => $user->name,
@@ -107,6 +114,18 @@ class AuthController extends Controller
             'company' => $user->relationLoaded('company') ? $user->company : null,
             'roles' => $user->getRoleNames(),
             'permissions' => $user->getAllPermissions()->pluck('name'),
+            'feature_access' => $user->feature_access ?? [],
+            'location_access' => $locationAccess ? $locationAccess->map(fn ($loc) => [
+                'id' => $loc->id,
+                'code' => $loc->code,
+                'name' => $loc->name,
+                'type' => $loc->type,
+                'status' => $loc->status,
+            ]) : [],
+            'last_login_at' => $user->last_login_at?->toIso8601String(),
+            'created_at' => $user->created_at?->toIso8601String(),
+            'profile_photo_path' => $user->profile_photo_path,
+            'profile_photo_url' => $photoUrl,
         ];
     }
 }

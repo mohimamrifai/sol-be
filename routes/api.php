@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\Admin\DashboardController as AdminDashboardControll
 use App\Http\Controllers\Api\Admin\InvoiceController as AdminInvoiceController;
 use App\Http\Controllers\Api\Admin\MasterDataController;
 use App\Http\Controllers\Api\Admin\PaymentController as AdminPaymentController;
+use App\Http\Controllers\Api\Admin\RoleManagementController;
 use App\Http\Controllers\Api\Admin\ShipmentController as AdminShipmentController;
 use App\Http\Controllers\Api\Admin\UserController;
 use App\Http\Controllers\Api\Admin\VendorController;
@@ -15,14 +16,18 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\Customer\BookingController as CustomerBookingController;
 use App\Http\Controllers\Api\Customer\BranchController as CustomerBranchController;
 use App\Http\Controllers\Api\Customer\CompanyController as CustomerCompanyController;
+use App\Http\Controllers\Api\Customer\CompanyDocumentController as CustomerCompanyDocumentController;
+use App\Http\Controllers\Api\Customer\CustomerLocationController;
 use App\Http\Controllers\Api\Customer\DashboardController as CustomerDashboardController;
 use App\Http\Controllers\Api\Customer\DocumentController as CustomerDocumentController;
 use App\Http\Controllers\Api\Customer\InvoiceController as CustomerInvoiceController;
 use App\Http\Controllers\Api\Customer\MasterDataReadController;
+use App\Http\Controllers\Api\Customer\MyProfileController;
 use App\Http\Controllers\Api\Customer\PaymentController as CustomerPaymentController;
 use App\Http\Controllers\Api\Customer\RegistrationController;
 use App\Http\Controllers\Api\Customer\ShipmentController as CustomerShipmentController;
 use App\Http\Controllers\Api\Customer\UserController as CustomerUserController;
+use App\Http\Controllers\Api\ForgotPasswordController;
 use App\Http\Controllers\Api\MasterMetadataController;
 use App\Http\Controllers\Api\MidtransWebhookController;
 use App\Http\Controllers\Api\PublicBookingEstimateController;
@@ -40,8 +45,8 @@ use Illuminate\Support\Facades\Route;
 // ══════════════════════════════════════════════
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [RegistrationController::class, 'register']);
-Route::post('/forgot-password', [\App\Http\Controllers\Api\ForgotPasswordController::class, 'sendResetLinkEmail']);
-Route::post('/reset-password', [\App\Http\Controllers\Api\ForgotPasswordController::class, 'reset']);
+Route::post('/forgot-password', [ForgotPasswordController::class, 'sendResetLinkEmail']);
+Route::post('/reset-password', [ForgotPasswordController::class, 'reset']);
 
 Route::get('/register/check-company-code', [RegistrationController::class, 'checkCompanyCode']);
 Route::get('/tracking', [PublicTrackingController::class, 'track'])->name('public.tracking');
@@ -107,10 +112,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('users', UserController::class);
 
         // Role & Permission Management
-        Route::get('roles', [\App\Http\Controllers\Api\Admin\RoleManagementController::class, 'index']);
-        Route::post('roles', [\App\Http\Controllers\Api\Admin\RoleManagementController::class, 'storeRole']);
-        Route::get('permissions', [\App\Http\Controllers\Api\Admin\RoleManagementController::class, 'permissions']);
-        Route::put('roles/{role}/permissions', [\App\Http\Controllers\Api\Admin\RoleManagementController::class, 'updateRolePermissions']);
+        Route::get('roles', [RoleManagementController::class, 'index']);
+        Route::post('roles', [RoleManagementController::class, 'storeRole']);
+        Route::get('permissions', [RoleManagementController::class, 'permissions']);
+        Route::put('roles/{role}/permissions', [RoleManagementController::class, 'updateRolePermissions']);
 
         // Master Data – Locations
         Route::get('locations', [MasterDataController::class, 'locations']);
@@ -290,10 +295,43 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('documents/{id}/download', [CustomerDocumentController::class, 'download']);
 
         // Company Settings
-        Route::get('company', [CustomerCompanyController::class, 'show']);
-        Route::put('company', [CustomerCompanyController::class, 'update']);
+        Route::get('company', [CustomerCompanyController::class, 'show'])->name('customer.company.show');
+        Route::put('company', [CustomerCompanyController::class, 'update'])->name('customer.company.update');
+        Route::get('company/commercial', [CustomerCompanyController::class, 'commercial'])->name('customer.company.commercial');
+        Route::get('company/activities', [CustomerCompanyController::class, 'activities'])->name('customer.company.activities');
 
-        // User Management (PIC & Finance)
-        Route::apiResource('users', CustomerUserController::class)->names('customer.users');
+        // Company Documents
+        Route::get('company/documents', [CustomerCompanyDocumentController::class, 'index'])->name('customer.company.documents.index');
+        Route::post('company/documents', [CustomerCompanyDocumentController::class, 'store'])->name('customer.company.documents.store');
+        Route::get('company/documents/{document}', [CustomerCompanyDocumentController::class, 'show'])->name('customer.company.documents.show');
+        Route::get('company/documents/{document}/download', [CustomerCompanyDocumentController::class, 'download'])->name('customer.company.documents.download');
+        Route::delete('company/documents/{document}', [CustomerCompanyDocumentController::class, 'destroy'])->name('customer.company.documents.destroy');
+
+        // Locations
+        Route::get('locations/stats', [CustomerLocationController::class, 'stats'])->name('customer.locations.stats');
+        Route::get('locations', [CustomerLocationController::class, 'index'])->name('customer.locations.index');
+        Route::post('locations', [CustomerLocationController::class, 'store'])->name('customer.locations.store');
+        Route::get('locations/{location}', [CustomerLocationController::class, 'show'])->name('customer.locations.show');
+        Route::put('locations/{location}', [CustomerLocationController::class, 'update'])->name('customer.locations.update');
+        Route::patch('locations/{location}/status', [CustomerLocationController::class, 'changeStatus'])->name('customer.locations.status');
+        Route::get('locations/{location}/activities', [CustomerLocationController::class, 'activities'])->name('customer.locations.activities');
+
+        // User Management
+        Route::get('users/stats', [CustomerUserController::class, 'stats'])->name('customer.users.stats');
+        Route::get('users', [CustomerUserController::class, 'index'])->name('customer.users.index');
+        Route::post('users', [CustomerUserController::class, 'store'])->name('customer.users.store');
+        Route::get('users/{user}', [CustomerUserController::class, 'show'])->name('customer.users.show');
+        Route::put('users/{user}', [CustomerUserController::class, 'update'])->name('customer.users.update');
+        Route::patch('users/{user}/status', [CustomerUserController::class, 'changeStatus'])->name('customer.users.status');
+        Route::patch('users/{user}/role', [CustomerUserController::class, 'changeRole'])->name('customer.users.role');
+        Route::post('users/{user}/reset-password', [CustomerUserController::class, 'resetPassword'])->name('customer.users.reset-password');
+        Route::get('users/{user}/activities', [CustomerUserController::class, 'activities'])->name('customer.users.activities');
+
+        // My Profile
+        Route::get('my-profile', [MyProfileController::class, 'show'])->name('customer.my-profile.show');
+        Route::put('my-profile', [MyProfileController::class, 'update'])->name('customer.my-profile.update');
+        Route::post('my-profile/photo', [MyProfileController::class, 'uploadPhoto'])->name('customer.my-profile.photo.upload');
+        Route::delete('my-profile/photo', [MyProfileController::class, 'deletePhoto'])->name('customer.my-profile.photo.delete');
+        Route::post('my-profile/change-password', [MyProfileController::class, 'changePassword'])->name('customer.my-profile.change-password');
     });
 });

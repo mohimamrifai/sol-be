@@ -2,20 +2,25 @@
 
 namespace App\Models;
 
+use App\Enums\UserStatus;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Database\Factories\UserFactory;
+use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable, HasRoles, SoftDeletes;
+    /** @use HasFactory<UserFactory> */
+    use HasApiTokens, HasFactory, HasRoles, Notifiable, SoftDeletes;
 
     protected $fillable = [
         'name',
@@ -25,6 +30,8 @@ class User extends Authenticatable
         'status',
         'user_type',
         'company_id',
+        'feature_access',
+        'profile_photo_path',
     ];
 
     protected $hidden = [
@@ -37,10 +44,12 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'feature_access' => 'array',
+            'last_login_at' => 'datetime',
+            'status' => UserStatus::class,
         ];
     }
 
-    // ── Relationships ──
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
@@ -49,6 +58,16 @@ class User extends Authenticatable
     public function bookings(): HasMany
     {
         return $this->hasMany(Booking::class);
+    }
+
+    public function locationAccess(): BelongsToMany
+    {
+        return $this->belongsToMany(CustomerLocation::class, 'user_location_access');
+    }
+
+    public function activities(): MorphMany
+    {
+        return $this->morphMany(CompanyActivity::class, 'subject')->orderByDesc('occurred_at');
     }
 
     // ── Helpers ──
@@ -64,7 +83,7 @@ class User extends Authenticatable
 
     public function isActive(): bool
     {
-        return $this->status === 'active';
+        return $this->status === UserStatus::Active;
     }
 
     /**
@@ -72,8 +91,8 @@ class User extends Authenticatable
      */
     public function sendPasswordResetNotification($token): void
     {
-        $url = config('app.frontend_url') . '/reset-password?token=' . $token . '&email=' . $this->email;
-        $this->notify(new \Illuminate\Auth\Notifications\ResetPassword($token));
+        $url = config('app.frontend_url').'/reset-password?token='.$token.'&email='.$this->email;
+        $this->notify(new ResetPassword($token));
         // Note: Default ResetPassword notification uses a named route 'password.reset'.
         // To truly customize the URL inside the email, we might need a custom Notification.
         // For now, let's assume standard Laravel link is okay OR we use a custom one.

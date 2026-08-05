@@ -58,6 +58,7 @@ enum DocumentType: string
                 return $case;
             }
         }
+
         return null;
     }
 
@@ -67,6 +68,7 @@ enum DocumentType: string
         if (count($parts) !== 2) {
             return [null, null];
         }
+
         return [self::fromPrefix($parts[0]), (int) $parts[1]];
     }
 }

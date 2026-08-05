@@ -4,15 +4,16 @@ namespace Database\Seeders;
 
 use App\Models\User;
 use Illuminate\Database\Seeder;
-use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
     public function run(): void
     {
         // Reset cached roles and permissions
-        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
         // ── Permissions (25+; extended for granular roles) ──
         $permissions = [
@@ -37,6 +38,10 @@ class RolesAndPermissionsSeeder extends Seeder
             'manage_branches', 'manage_documents', 'view_documents', 'manage_notifications',
             'view_audit_log', 'view_vendors', 'view_pricing', 'edit_pricing',
             'view_containers', 'edit_containers', 'manage_tracking_photos',
+            // Granular customer permissions (FSD Users → Default Role)
+            'view_company', 'manage_company',
+            'view_locations', 'manage_locations',
+            'manage_bookings',
         ];
 
         foreach ($permissions as $permission) {
@@ -71,19 +76,38 @@ class RolesAndPermissionsSeeder extends Seeder
         // ── Roles Customer ──
         $companyAdmin = Role::firstOrCreate(['name' => 'company_admin', 'guard_name' => 'web']);
         $companyAdmin->givePermissionTo([
-            'view_bookings', 'create_bookings',
-            'view_shipments', 'view_invoices', 'view_payments', 'view_documents',
+            'view_company', 'manage_company',
+            'view_locations', 'manage_locations',
             'view_users', 'create_users', 'edit_users',
+            'view_bookings', 'create_bookings', 'manage_bookings',
+            'view_shipments', 'view_invoices', 'view_payments',
+            'view_documents', 'manage_documents',
         ]);
 
         $opsPic = Role::firstOrCreate(['name' => 'ops_pic', 'guard_name' => 'web']);
         $opsPic->givePermissionTo([
-            'view_bookings', 'create_bookings', 'view_shipments', 'view_documents',
+            'view_company', 'view_locations',
+            'view_bookings', 'create_bookings',
+            'view_shipments', 'view_documents',
         ]);
 
         $financePic = Role::firstOrCreate(['name' => 'finance_pic', 'guard_name' => 'web']);
         $financePic->givePermissionTo([
-            'view_bookings', 'view_shipments', 'view_invoices', 'view_payments', 'view_documents',
+            'view_company',
+            'view_bookings', 'view_shipments',
+            'view_invoices', 'view_payments',
+            'view_documents', 'manage_documents',
+        ]);
+
+        $viewer = Role::firstOrCreate(['name' => 'viewer', 'guard_name' => 'web']);
+        $viewer->givePermissionTo([
+            'view_company',
+            'view_locations',
+            'view_users',
+            'view_bookings',
+            'view_shipments',
+            'view_invoices', 'view_payments',
+            'view_documents',
         ]);
 
         // ── Super Admin User (login dev: admin@sol.com / password) ──

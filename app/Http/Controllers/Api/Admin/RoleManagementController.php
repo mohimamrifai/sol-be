@@ -16,6 +16,7 @@ class RoleManagementController extends Controller
     public function index(): JsonResponse
     {
         $roles = Role::with('permissions')->get();
+
         return response()->json(['data' => $roles]);
     }
 
@@ -25,6 +26,7 @@ class RoleManagementController extends Controller
     public function permissions(): JsonResponse
     {
         $permissions = Permission::all();
+
         return response()->json(['data' => $permissions]);
     }
 
