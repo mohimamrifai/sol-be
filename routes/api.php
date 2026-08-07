@@ -32,6 +32,11 @@ use App\Http\Controllers\Api\MasterMetadataController;
 use App\Http\Controllers\Api\MidtransWebhookController;
 use App\Http\Controllers\Api\PublicBookingEstimateController;
 use App\Http\Controllers\Api\PublicTrackingController;
+use App\Http\Controllers\Api\Vendor\DashboardController;
+use App\Http\Controllers\Api\Vendor\DocumentController;
+use App\Http\Controllers\Api\Vendor\JobOrderController;
+use App\Http\Controllers\Api\Vendor\VendorInvoiceController;
+use App\Http\Controllers\Api\Vendor\VendorPaymentController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -333,5 +338,77 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('my-profile/photo', [MyProfileController::class, 'uploadPhoto'])->name('customer.my-profile.photo.upload');
         Route::delete('my-profile/photo', [MyProfileController::class, 'deletePhoto'])->name('customer.my-profile.photo.delete');
         Route::post('my-profile/change-password', [MyProfileController::class, 'changePassword'])->name('customer.my-profile.change-password');
+    });
+
+    // ── Vendor Portal API ────────────────────────────────────────────────
+    Route::middleware(['auth:sanctum', 'vendor'])->prefix('vendor')->group(function () {
+        Route::get('dashboard', [DashboardController::class, 'index']);
+
+        Route::prefix('job-orders')->group(function () {
+            Route::get('stats', [JobOrderController::class, 'stats']);
+            Route::get('/', [JobOrderController::class, 'index']);
+            Route::get('{shipment}', [JobOrderController::class, 'show']);
+            Route::post('{shipment}/accept', [JobOrderController::class, 'accept']);
+            Route::post('{shipment}/progress', [JobOrderController::class, 'submitProgress']);
+            Route::post('{shipment}/submit-completion', [JobOrderController::class, 'submitCompletion']);
+            Route::get('{shipment}/activities', [JobOrderController::class, 'activities']);
+        });
+
+        Route::prefix('documents')->group(function () {
+            Route::get('stats', [DocumentController::class, 'stats']);
+            Route::get('/', [DocumentController::class, 'index']);
+            Route::get('{attachment}', [DocumentController::class, 'show']);
+            Route::get('{attachment}/download', [DocumentController::class, 'download']);
+        });
+
+        Route::prefix('invoices')->group(function () {
+            Route::get('stats', [VendorInvoiceController::class, 'stats']);
+            Route::get('eligible-job-orders', [VendorInvoiceController::class, 'eligibleJobOrders']);
+            Route::get('/', [VendorInvoiceController::class, 'index']);
+            Route::post('/', [VendorInvoiceController::class, 'store']);
+            Route::get('{invoice}', [VendorInvoiceController::class, 'show']);
+            Route::post('{invoice}', [VendorInvoiceController::class, 'update']);
+            Route::post('{invoice}/submit', [VendorInvoiceController::class, 'submit']);
+            Route::get('{invoice}/download', [VendorInvoiceController::class, 'download']);
+        });
+
+        Route::prefix('payments')->group(function () {
+            Route::get('stats', [VendorPaymentController::class, 'stats']);
+            Route::get('/', [VendorPaymentController::class, 'index']);
+            Route::get('{payment}', [VendorPaymentController::class, 'show']);
+            Route::get('{payment}/receipt', [VendorPaymentController::class, 'receipt']);
+        });
+
+        Route::prefix('company')->group(function () {
+            Route::get('/', [App\Http\Controllers\Api\Vendor\CompanyController::class, 'show']);
+            Route::put('/', [App\Http\Controllers\Api\Vendor\CompanyController::class, 'update']);
+            Route::get('activities', [App\Http\Controllers\Api\Vendor\CompanyController::class, 'activities']);
+        });
+
+        Route::prefix('users')->group(function () {
+            Route::get('stats', [App\Http\Controllers\Api\Vendor\UserController::class, 'stats']);
+            Route::get('/', [App\Http\Controllers\Api\Vendor\UserController::class, 'index']);
+            Route::post('/', [App\Http\Controllers\Api\Vendor\UserController::class, 'store']);
+            Route::get('{user}', [App\Http\Controllers\Api\Vendor\UserController::class, 'show']);
+            Route::put('{user}', [App\Http\Controllers\Api\Vendor\UserController::class, 'update']);
+            Route::patch('{user}/role', [App\Http\Controllers\Api\Vendor\UserController::class, 'changeRole']);
+            Route::patch('{user}/status', [App\Http\Controllers\Api\Vendor\UserController::class, 'changeStatus']);
+            Route::post('{user}/reset-password', [App\Http\Controllers\Api\Vendor\UserController::class, 'resetPassword']);
+            Route::get('{user}/activities', [App\Http\Controllers\Api\Vendor\UserController::class, 'activities']);
+        });
+
+        Route::prefix('my-profile')->group(function () {
+            Route::get('/', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'show']);
+            Route::put('/', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'update']);
+            Route::post('change-password', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'changePassword']);
+            Route::post('photo', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'uploadPhoto']);
+            Route::delete('photo', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'deletePhoto']);
+            Route::get('activities', [App\Http\Controllers\Api\Vendor\MyProfileController::class, 'activities']);
+        });
+
+        Route::prefix('master')->group(function () {
+            Route::get('service-types', [App\Http\Controllers\Api\Vendor\MasterDataReadController::class, 'serviceTypes']);
+            Route::get('transport-modes', [App\Http\Controllers\Api\Vendor\MasterDataReadController::class, 'transportModes']);
+        });
     });
 });

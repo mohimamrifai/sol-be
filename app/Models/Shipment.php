@@ -42,9 +42,11 @@ class Shipment extends Model
 
     protected $fillable = [
         'shipment_no', 'shipment_number', 'waybill_number', 'booking_id',
-        'company_id', 'origin_location_id', 'destination_location_id',
+        'company_id', 'vendor_company_id', 'origin_location_id', 'destination_location_id',
         'transport_mode_id', 'service_type_id', 'cargo_category_id',
-        'shipment_coverage', 'status',
+        'shipment_coverage', 'status', 'vendor_status',
+        'accepted_at', 'completion_submitted_at', 'completion_verified_at',
+        'completion_remark', 'vendor_rejection_reason',
         'estimated_departure', 'estimated_arrival',
         'actual_departure', 'actual_arrival',
         'is_dangerous_goods', 'dg_class_id', 'un_number', 'msds_file',
@@ -64,6 +66,9 @@ class Shipment extends Model
             'temperature' => 'decimal:2',
             'shipper_snapshot' => 'array',
             'consignee_snapshot' => 'array',
+            'accepted_at' => 'datetime',
+            'completion_submitted_at' => 'datetime',
+            'completion_verified_at' => 'datetime',
         ];
     }
 
@@ -127,7 +132,37 @@ class Shipment extends Model
 
     public function company(): BelongsTo
     {
-        return $this->belongsTo(Company::class);
+        return $this->belongsTo(Company::class, 'company_id');
+    }
+
+    public function vendorCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'vendor_company_id');
+    }
+
+    public function vendorInvoice(): HasOne
+    {
+        return $this->hasOne(VendorInvoice::class, 'shipment_id');
+    }
+
+    public function progressUpdates(): HasMany
+    {
+        return $this->hasMany(VendorProgressUpdate::class)->orderByDesc('submitted_at');
+    }
+
+    public function isVendorJobOrder(): bool
+    {
+        return $this->vendor_company_id !== null;
+    }
+
+    public function scopeForVendor($query, int $vendorCompanyId)
+    {
+        return $query->where('vendor_company_id', $vendorCompanyId);
+    }
+
+    public function scopeVendorJobOrders($query)
+    {
+        return $query->whereNotNull('vendor_company_id');
     }
 
     public function originLocation(): BelongsTo

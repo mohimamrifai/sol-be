@@ -102,6 +102,7 @@ class AuthController extends Controller
         }
 
         $locationAccess = $user->relationLoaded('locationAccess') ? $user->locationAccess : null;
+        $company = $user->relationLoaded('company') ? $user->company : null;
 
         return [
             'id' => $user->id,
@@ -110,8 +111,29 @@ class AuthController extends Controller
             'phone' => $user->phone,
             'status' => $user->status,
             'user_type' => $user->user_type,
+            'is_vendor' => $user->isVendor(),
+            'is_customer' => $user->isCustomer(),
+            'is_internal' => $user->isInternal(),
             'company_id' => $user->company_id,
-            'company' => $user->relationLoaded('company') ? $user->company : null,
+            'company' => $company ? [
+                'id' => $company->id,
+                'name' => $company->name,
+                'type' => $company->type ?? 'customer',
+                'company_code' => $company->company_code,
+                'business_entity_type' => $company->business_entity_type,
+                'npwp' => $company->npwp,
+                'status' => $company->status,
+                'email' => $company->email,
+                'phone' => $company->phone,
+                'address' => $company->address,
+                'city' => $company->city,
+                'province' => $company->province,
+                'country' => $company->country,
+                'service_categories' => $company->service_categories ?? [],
+                'bank_name' => $company->bank_name,
+                'bank_account_number' => $company->bank_account_number,
+                'bank_account_name' => $company->bank_account_name,
+            ] : null,
             'roles' => $user->getRoleNames(),
             'permissions' => $user->getAllPermissions()->pluck('name'),
             'feature_access' => $user->feature_access ?? [],

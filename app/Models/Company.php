@@ -14,6 +14,7 @@ class Company extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
+        'type',
         'name',
         'business_entity_type',
         'business_entity_other',
@@ -28,11 +29,15 @@ class Company extends Model
         'postal_code',
         'business_category',
         'business_category_other',
+        'service_categories',
         'monthly_shipment_estimate',
         'contact_person',
         'email',
         'phone',
         'website',
+        'pic_name',
+        'pic_email',
+        'pic_mobile',
         'status',
         'billing_cycle',
         'payment_type',
@@ -50,6 +55,10 @@ class Company extends Model
         'outstanding_balance',
     ];
 
+    public const TYPE_CUSTOMER = 'customer';
+
+    public const TYPE_VENDOR = 'vendor';
+
     protected function casts(): array
     {
         return [
@@ -58,6 +67,7 @@ class Company extends Model
             'credit_limit' => 'decimal:2',
             'current_deposit_balance' => 'decimal:2',
             'outstanding_balance' => 'decimal:2',
+            'service_categories' => 'array',
         ];
     }
 
@@ -124,9 +134,39 @@ class Company extends Model
         return $this->morphMany(CompanyActivity::class, 'subject')->orderByDesc('occurred_at');
     }
 
+    public function vendorJobOrders(): HasMany
+    {
+        return $this->hasMany(Shipment::class, 'vendor_company_id');
+    }
+
+    public function vendorInvoices(): HasMany
+    {
+        return $this->hasMany(VendorInvoice::class, 'vendor_company_id');
+    }
+
     public function isActive(): bool
     {
         return $this->status === 'active';
+    }
+
+    public function isVendor(): bool
+    {
+        return $this->type === self::TYPE_VENDOR;
+    }
+
+    public function isCustomer(): bool
+    {
+        return $this->type === self::TYPE_CUSTOMER;
+    }
+
+    public function scopeVendor($query)
+    {
+        return $query->where('type', self::TYPE_VENDOR);
+    }
+
+    public function scopeCustomer($query)
+    {
+        return $query->where('type', self::TYPE_CUSTOMER);
     }
 
     public function hasOverdueInvoices(): bool

@@ -42,6 +42,15 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_company', 'manage_company',
             'view_locations', 'manage_locations',
             'manage_bookings',
+            // Vendor Portal
+            'vendor.access', 'vendor.dashboard',
+            'view_vendor_job_orders', 'manage_vendor_job_orders',
+            'accept_job_orders', 'submit_progress',
+            'view_vendor_documents', 'view_vendor_invoices',
+            'manage_vendor_invoices', 'submit_vendor_invoices',
+            'view_vendor_payments', 'view_vendor_company',
+            'manage_vendor_company', 'view_vendor_users',
+            'manage_vendor_users', 'manage_vendor_profile',
         ];
 
         foreach ($permissions as $permission) {
@@ -108,6 +117,53 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_shipments',
             'view_invoices', 'view_payments',
             'view_documents',
+        ]);
+
+        // ── Roles Vendor ──
+        $vendorCompanyAdmin = Role::firstOrCreate(['name' => 'vendor_company_admin', 'guard_name' => 'web']);
+        $vendorCompanyAdmin->givePermissionTo([
+            'vendor.access', 'vendor.dashboard',
+            'view_vendor_job_orders', 'manage_vendor_job_orders',
+            'accept_job_orders', 'submit_progress',
+            'view_vendor_documents',
+            'view_vendor_invoices', 'manage_vendor_invoices', 'submit_vendor_invoices',
+            'view_vendor_payments',
+            'view_vendor_company', 'manage_vendor_company',
+            'view_vendor_users', 'manage_vendor_users',
+            'manage_vendor_profile',
+        ]);
+
+        $vendorOpsPic = Role::firstOrCreate(['name' => 'vendor_ops_pic', 'guard_name' => 'web']);
+        $vendorOpsPic->givePermissionTo([
+            'vendor.access', 'vendor.dashboard',
+            'view_vendor_job_orders', 'manage_vendor_job_orders',
+            'accept_job_orders', 'submit_progress',
+            'view_vendor_documents',
+            'view_vendor_invoices',
+            'view_vendor_company',
+            'manage_vendor_profile',
+        ]);
+
+        $vendorFinancePic = Role::firstOrCreate(['name' => 'vendor_finance_pic', 'guard_name' => 'web']);
+        $vendorFinancePic->givePermissionTo([
+            'vendor.access', 'vendor.dashboard',
+            'view_vendor_job_orders',
+            'view_vendor_documents',
+            'view_vendor_invoices', 'manage_vendor_invoices', 'submit_vendor_invoices',
+            'view_vendor_payments',
+            'view_vendor_company',
+            'manage_vendor_profile',
+        ]);
+
+        $vendorViewer = Role::firstOrCreate(['name' => 'vendor_viewer', 'guard_name' => 'web']);
+        $vendorViewer->givePermissionTo([
+            'vendor.access', 'vendor.dashboard',
+            'view_vendor_job_orders',
+            'view_vendor_documents',
+            'view_vendor_invoices',
+            'view_vendor_payments',
+            'view_vendor_company',
+            'manage_vendor_profile',
         ]);
 
         // ── Super Admin User (login dev: admin@sol.com / password) ──

@@ -29,6 +29,9 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentTracking;
 use App\Models\TransportMode;
 use App\Models\User;
+use App\Models\VendorInvoice;
+use App\Models\VendorPayment;
+use App\Models\VendorProgressUpdate;
 use App\Services\LocationCodeService;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
@@ -67,7 +70,16 @@ class CustomerDemoSeeder extends Seeder
 
     public function run(): void
     {
+        // Truncate customer data dulu agar tidak menghapus super admin
+        // yang akan dibuat oleh RolesAndPermissionsSeeder di bawah.
         $this->truncateCustomerData();
+
+        // Pastikan dependency (roles, permissions, master data) tersedia
+        // agar seeder ini aman dijalankan berdiri sendiri via --class=CustomerDemoSeeder.
+        $this->call([
+            RolesAndPermissionsSeeder::class,
+            MasterDataSeeder::class,
+        ]);
 
         $mainCompany = $this->seedMainCompany();
         $this->seedSecondaryCompany();
@@ -93,12 +105,24 @@ class CustomerDemoSeeder extends Seeder
         $this->seedShipments($bookings, $customerUsers);
         $this->seedInvoices($bookings, $customerUsers);
 
+        $vendorCompany = $this->seedVendorCompany();
+        $vendorUsers = $this->seedVendorUsers($vendorCompany);
+        $vendorJobOrders = $this->seedVendorJobOrders($mainCompany, $vendorCompany, $vendorUsers);
+        $this->seedVendorInvoices($vendorCompany, $vendorJobOrders, $vendorUsers);
+        $this->seedVendorProgressUpdates($vendorJobOrders, $vendorUsers);
+
         $this->command?->info('Customer demo data seeded: 1 main company + 4 PIC users + 4 locations + 2 documents + activities.');
+        $this->command?->info('Vendor demo data seeded: 1 vendor company + 5 vendor users + 5 job orders + vendor invoices.');
     }
 
     private function truncateCustomerData(): void
     {
         $tables = [
+            'vendor_invoice_attachments',
+            'vendor_payments',
+            'vendor_invoices',
+            'vendor_progress_attachments',
+            'vendor_progress_updates',
             'payment_proof_attachments',
             'payment_activities',
             'invoice_activities',
@@ -1072,5 +1096,328 @@ class CustomerDemoSeeder extends Seeder
             'document_type' => 'invoice',
             'remarks' => 'Lampiran invoice PDF hasil seed.',
         ]);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // VENDOR PORTAL DEMO DATA
+    // ──────────────────────────────────────────────────────────────────────
+
+    private function seedVendorCompany(): Company
+    {
+        return Company::create([
+            'type' => 'vendor',
+            'name' => 'PT Mitra Logistik Nusantara',
+            'business_entity_type' => 'PT',
+            'company_code' => 'V-MLN',
+            'npwp' => '03.456.789.0-123.000',
+            'nib' => '9120000054321',
+            'address' => 'Jl. Gatot Subroto Kav. 27',
+            'city' => 'Kota Jakarta Selatan',
+            'province' => 'DKI Jakarta',
+            'country' => 'Indonesia',
+            'district' => 'Setiabudi',
+            'postal_code' => '12950',
+            'service_categories' => ['trucking', 'warehouse', 'rail_handling'],
+            'business_category' => 'logistics',
+            'business_category_other' => 'Jasa Logistik & Transportasi',
+            'monthly_shipment_estimate' => '50_to_100',
+            'website' => 'https://www.mitra-logistik.co.id',
+            'contact_person' => 'Hendro Wibowo',
+            'email' => 'finance@mitra-logistik.co.id',
+            'phone' => '021-527-9988',
+            'pic_name' => 'Hendro Wibowo',
+            'pic_email' => 'hendro.wibowo@mitra-logistik.co.id',
+            'pic_mobile' => '0812-7777-1234',
+            'status' => 'active',
+            'bank_name' => 'BNI',
+            'bank_account_number' => '555-987-6543',
+            'bank_account_name' => 'PT Mitra Logistik Nusantara',
+        ]);
+    }
+
+    private function seedVendorUsers(Company $vendorCompany): Collection
+    {
+        $users = collect();
+        $users->push($this->seedVendorUser($vendorCompany, 'admin@vendor.test', 'Demo Vendor Admin', 'vendor_company_admin'));
+        $users->push($this->seedVendorUser($vendorCompany, 'ops1@vendor.test', 'Demo Vendor Ops 1', 'vendor_ops_pic'));
+        $users->push($this->seedVendorUser($vendorCompany, 'ops2@vendor.test', 'Demo Vendor Ops 2', 'vendor_ops_pic'));
+        $users->push($this->seedVendorUser($vendorCompany, 'finance@vendor.test', 'Demo Vendor Finance', 'vendor_finance_pic'));
+        $users->push($this->seedVendorUser($vendorCompany, 'viewer@vendor.test', 'Demo Vendor Viewer', 'vendor_viewer'));
+
+        return $users;
+    }
+
+    private function seedVendorUser(Company $company, string $email, string $name, string $role): User
+    {
+        $user = User::create([
+            'name' => $name,
+            'email' => $email,
+            'password' => bcrypt(self::PASSWORD),
+            'phone' => '0813'.str_pad((string) (random_int(1000000, 9999999)), 7, '0', STR_PAD_LEFT),
+            'status' => UserStatus::Active,
+            'user_type' => 'vendor',
+            'company_id' => $company->id,
+            'last_login_at' => $role === 'vendor_company_admin' ? now() : null,
+            'feature_access' => null,
+        ]);
+        $user->syncRoles([$role]);
+
+        return $user;
+    }
+
+    private function seedVendorJobOrders(Company $customer, Company $vendor, Collection $vendorUsers): Collection
+    {
+        $modes = TransportMode::orderBy('id')->get();
+        $serviceTypes = ServiceType::orderBy('id')->get();
+        $locations = Location::orderBy('id')->get();
+        $origin = $locations->firstWhere('code', 'JKT') ?? $locations->first();
+        $destination = $locations->firstWhere('code', 'SUB') ?? $locations->last();
+        $serviceFcl = $serviceTypes->firstWhere('code', 'FCL') ?? $serviceTypes->first();
+        $rail = $modes->firstWhere('code', 'RAIL') ?? $modes->first();
+        $vendorAdmin = $vendorUsers->firstWhere('email', 'admin@vendor.test');
+        $ops1 = $vendorUsers->firstWhere('email', 'ops1@vendor.test');
+
+        $jobOrders = collect();
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $vendorAdmin,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'pending_acceptance',
+        ]));
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $vendorAdmin,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'accepted',
+        ]));
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $ops1,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'in_progress',
+        ]));
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $ops1,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'waiting_verification',
+        ]));
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $ops1,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'completed',
+        ]));
+
+        $jobOrders->push($this->makeVendorJobOrder([
+            'customer' => $customer,
+            'vendor' => $vendor,
+            'creator' => $ops1,
+            'origin' => $origin,
+            'destination' => $destination,
+            'service' => $serviceFcl,
+            'mode' => $rail,
+            'vendor_status' => 'completed',
+        ]));
+
+        return $jobOrders;
+    }
+
+    private function makeVendorJobOrder(array $params): Shipment
+    {
+        $customer = $params['customer'];
+        $vendor = $params['vendor'];
+        $creator = $params['creator'];
+        $status = $params['vendor_status'];
+
+        $booking = Booking::firstOrCreate(
+            [
+                'booking_number' => 'VJOB-'.$vendor->id.'-'.now()->format('Ymd').'-'.str_pad((string) (Booking::max('id') + 1), 4, '0', STR_PAD_LEFT),
+            ],
+            [
+                'company_id' => $customer->id,
+                'user_id' => $creator->id,
+                'origin_location_id' => $params['origin']->id,
+                'destination_location_id' => $params['destination']->id,
+                'service_type_id' => $params['service']->id,
+                'transport_mode_id' => $params['mode']->id,
+                'shipment_coverage' => 'door_to_door',
+                'status' => 'approved',
+                'shipper_name' => 'Shipper '.$customer->name,
+                'shipper_address' => $customer->address ?? 'Alamat pengirim',
+                'shipper_phone' => $customer->phone ?? '0810000000',
+                'consignee_name' => 'Consignee '.$vendor->name,
+                'consignee_address' => $vendor->address ?? 'Alamat penerima',
+                'consignee_phone' => $vendor->phone ?? '0820000000',
+            ]
+        );
+
+        $shipment = Shipment::create([
+            'shipment_no' => (int) (Shipment::max('id') + 1),
+            'shipment_number' => 'JO-'.now()->format('Ymd').'-'.str_pad((string) (Shipment::max('id') + 1), 4, '0', STR_PAD_LEFT),
+            'booking_id' => $booking->id,
+            'company_id' => $customer->id,
+            'vendor_company_id' => $vendor->id,
+            'vendor_status' => $status,
+            'accepted_at' => in_array($status, ['accepted', 'in_progress', 'waiting_verification', 'completed'], true) ? now()->subDays(2) : null,
+            'completion_submitted_at' => in_array($status, ['waiting_verification', 'completed'], true) ? now()->subDay() : null,
+            'completion_verified_at' => $status === 'completed' ? now() : null,
+            'origin_location_id' => $params['origin']->id ?? null,
+            'destination_location_id' => $params['destination']->id ?? null,
+            'transport_mode_id' => $params['mode']->id ?? null,
+            'service_type_id' => $params['service']->id ?? null,
+            'shipment_coverage' => 'door_to_door',
+            'status' => match ($status) {
+                'pending_acceptance' => 'created',
+                'accepted', 'in_progress' => 'cargo_received',
+                'waiting_verification' => 'ready_for_pickup',
+                'completed' => 'completed',
+                default => 'created',
+            },
+            'estimated_departure' => now()->addDays(7),
+            'estimated_arrival' => now()->addDays(10),
+            'is_dangerous_goods' => false,
+            'created_by' => $creator->id,
+            'notes' => 'Job order untuk vendor '.$vendor->name,
+        ]);
+
+        if ($status === 'pending_acceptance') {
+            CompanyActivity::create([
+                'subject_type' => Shipment::class,
+                'subject_id' => $shipment->id,
+                'event_key' => 'vendor_job_assigned',
+                'description' => 'Job order di-assign ke vendor '.$vendor->name.'.',
+                'meta' => ['vendor_company_id' => $vendor->id],
+                'actor_user_id' => $creator->id,
+                'occurred_at' => $shipment->created_at,
+            ]);
+        }
+
+        return $shipment;
+    }
+
+    private function seedVendorInvoices(Company $vendor, Collection $jobOrders, Collection $vendorUsers): void
+    {
+        $completedOrders = $jobOrders->filter(fn ($jo) => $jo->vendor_status === 'completed');
+        $inProgressOrders = $jobOrders->filter(fn ($jo) => $jo->vendor_status === 'in_progress');
+        $admin = $vendorUsers->firstWhere('email', 'admin@vendor.test');
+        $finance = $vendorUsers->firstWhere('email', 'finance@vendor.test');
+
+        $invoiceableOrders = $completedOrders->slice(0, max(0, $completedOrders->count() - 1))->values();
+
+        foreach ($invoiceableOrders as $idx => $jo) {
+            $isPaid = $idx === 0;
+            $invoice = VendorInvoice::create([
+                'vendor_company_id' => $vendor->id,
+                'shipment_id' => $jo->id,
+                'invoice_number' => 'INV-V-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT),
+                'invoice_date' => now()->subDays(3)->toDateString(),
+                'due_date' => now()->addDays(14)->toDateString(),
+                'invoice_amount' => 12500000,
+                'tax_amount' => 1375000,
+                'total_amount' => 13875000,
+                'status' => $isPaid ? 'paid' : 'approved',
+                'notes' => 'Invoice untuk job order '.$jo->shipment_number,
+                'file_path' => 'seed/vendor-invoices/INV-V-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT).'.pdf',
+                'created_by' => $finance->id,
+                'submitted_at' => now()->subDays(2),
+                'reviewed_by' => $admin->id,
+                'reviewed_at' => now()->subDay(),
+            ]);
+
+            if ($isPaid) {
+                VendorPayment::create([
+                    'vendor_invoice_id' => $invoice->id,
+                    'payment_number' => 'PAY-V-000001',
+                    'amount' => $invoice->total_amount,
+                    'payment_date' => now()->toDateString(),
+                    'payment_method' => 'bank_transfer',
+                    'reference_no' => 'TRF-20260805-0001',
+                    'status' => 'paid',
+                    'paid_by' => $admin->id,
+                    'notes' => 'Pembayaran otomatis via finance dashboard.',
+                ]);
+            }
+        }
+
+        if ($inProgressOrders->isNotEmpty()) {
+            $jo = $inProgressOrders->first();
+            VendorInvoice::create([
+                'vendor_company_id' => $vendor->id,
+                'shipment_id' => $jo->id,
+                'invoice_number' => 'INV-V-DRAFT-0001',
+                'invoice_date' => now()->toDateString(),
+                'due_date' => now()->addDays(14)->toDateString(),
+                'invoice_amount' => 5500000,
+                'tax_amount' => 605000,
+                'total_amount' => 6105000,
+                'status' => 'draft',
+                'notes' => 'Draft invoice — menunggu completion job order.',
+                'created_by' => $finance->id,
+            ]);
+        }
+    }
+
+    private function seedVendorProgressUpdates(Collection $jobOrders, Collection $vendorUsers): void
+    {
+        $inProgressOrders = $jobOrders->filter(fn ($jo) => in_array($jo->vendor_status, ['in_progress', 'waiting_verification', 'completed'], true));
+        $ops1 = $vendorUsers->firstWhere('email', 'ops1@vendor.test');
+
+        $notes = [
+            'Tim sudah di lokasi, proses loading dimulai.',
+            'Pengiriman 50% selesai, estimasi sampai sore ini.',
+            'Barang sudah sampai di tujuan, menunggu verifikasi penerima.',
+        ];
+
+        $idx = 0;
+        foreach ($inProgressOrders as $jo) {
+            if ($idx >= count($notes)) {
+                break;
+            }
+            $update = VendorProgressUpdate::create([
+                'shipment_id' => $jo->id,
+                'progress_notes' => $notes[$idx],
+                'completion_remark' => $jo->vendor_status === 'completed' ? 'Pekerjaan selesai seluruhnya.' : null,
+                'submitted_by' => $ops1->id,
+                'submitted_at' => now()->subHours(6 - $idx),
+            ]);
+
+            CompanyActivity::create([
+                'subject_type' => Shipment::class,
+                'subject_id' => $jo->id,
+                'event_key' => 'vendor_progress_submitted',
+                'description' => 'Progress update dikirim oleh vendor.',
+                'meta' => ['update_id' => $update->id, 'notes_preview' => substr($notes[$idx], 0, 60)],
+                'actor_user_id' => $ops1->id,
+                'occurred_at' => $update->submitted_at,
+            ]);
+
+            $idx++;
+        }
     }
 }

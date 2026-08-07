@@ -81,6 +81,11 @@ class User extends Authenticatable
         return $this->user_type === 'customer';
     }
 
+    public function isVendor(): bool
+    {
+        return $this->user_type === 'vendor';
+    }
+
     public function isActive(): bool
     {
         return $this->status === UserStatus::Active;

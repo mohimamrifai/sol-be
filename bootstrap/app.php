@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Http\Middleware\EnsureUserIsCustomer;
+use App\Http\Middleware\EnsureUserIsVendor;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -20,6 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin' => EnsureUserIsAdmin::class,
             'customer' => EnsureUserIsCustomer::class,
+            'vendor' => EnsureUserIsVendor::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
