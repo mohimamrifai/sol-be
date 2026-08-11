@@ -14,26 +14,76 @@ use Illuminate\Http\Request;
 
 class ShipmentController extends Controller
 {
+    public function stats(): JsonResponse
+    {
+        $all = Shipment::query()->select('status')->get();
+        $planning = $all->whereIn('status', ['created', 'booking_created', 'survey_completed'])->count();
+        $ready = $all->whereIn('status', ['cargo_received', 'stuffing_container', 'container_sealed', 'ready_for_pickup'])->count();
+        $inTransit = $all->whereIn('status', ['train_departed', 'departed', 'train_arrived', 'arrived', 'container_unloading', 'unloading'])->count();
+        $completed = $all->where('status', 'completed')->count();
+        $cancelled = $all->where('status', 'cancelled')->count();
+
+        return response()->json([
+            'data' => [
+                'planning' => $planning,
+                'ready_for_departure' => $ready,
+                'in_transit' => $inTransit,
+                'completed' => $completed,
+                'cancelled' => $cancelled,
+            ],
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Shipment::with([
-            'company:id,name', 'originLocation:id,name,code',
+            'company:id,name,company_code', 'booking:id,booking_number',
+            'originLocation:id,name,code',
             'destinationLocation:id,name,code', 'serviceType:id,name,code',
         ]);
 
         if ($request->filled('status')) {
-            $query->where('status', $request->status);
+            $this->applyFsdStatusFilter($query, (string) $request->status);
         }
         if ($request->filled('company_id')) {
             $query->where('company_id', $request->company_id);
         }
+        if ($request->filled('service_type_id')) {
+            $query->where('service_type_id', $request->service_type_id);
+        }
+        if ($request->filled('shipment_coverage')) {
+            $query->where('shipment_coverage', $request->shipment_coverage);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
+        }
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where(fn ($q) => $q->where('shipment_number', 'like', "%{$s}%")
-                ->orWhere('waybill_number', 'like', "%{$s}%"));
+            $query->where(function ($q) use ($s) {
+                $q->where('shipment_number', 'like', "%{$s}%")
+                    ->orWhere('waybill_number', 'like', "%{$s}%")
+                    ->orWhereHas('booking', fn ($bq) => $bq->where('booking_number', 'like', "%{$s}%"))
+                    ->orWhereHas('company', fn ($cq) => $cq->where('name', 'like', "%{$s}%"));
+            });
         }
 
         return response()->json($query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15));
+    }
+
+    private function applyFsdStatusFilter($query, string $fsdStatus): void
+    {
+        $map = [
+            'planning' => ['created', 'booking_created', 'survey_completed'],
+            'ready_for_departure' => ['cargo_received', 'stuffing_container', 'container_sealed', 'ready_for_pickup'],
+            'in_transit' => ['train_departed', 'departed', 'train_arrived', 'arrived', 'container_unloading', 'unloading'],
+            'completed' => ['completed'],
+            'cancelled' => ['cancelled'],
+        ];
+        $statuses = $map[$fsdStatus] ?? [$fsdStatus];
+        $query->whereIn('status', $statuses);
     }
 
     public function show(Shipment $shipment): JsonResponse

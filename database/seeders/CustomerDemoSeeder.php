@@ -111,7 +111,10 @@ class CustomerDemoSeeder extends Seeder
         $this->seedVendorInvoices($vendorCompany, $vendorJobOrders, $vendorUsers);
         $this->seedVendorProgressUpdates($vendorJobOrders, $vendorUsers);
 
+        $this->seedPhase2AdminReviewAndStatuses($mainCompany);
+
         $this->command?->info('Customer demo data seeded: 1 main company + 4 PIC users + 4 locations + 2 documents + activities.');
+        $this->command?->info('Phase 2 admin: pending/suspended customers + review fields.');
         $this->command?->info('Vendor demo data seeded: 1 vendor company + 5 vendor users + 5 job orders + vendor invoices.');
     }
 
@@ -164,6 +167,7 @@ class CustomerDemoSeeder extends Seeder
     private function seedMainCompany(): Company
     {
         return Company::create([
+            'type' => Company::TYPE_CUSTOMER,
             'name' => 'PT ABC Indonesia',
             'business_entity_type' => 'PT',
             'company_code' => 'ABC',
@@ -203,6 +207,7 @@ class CustomerDemoSeeder extends Seeder
     private function seedSecondaryCompany(): Company
     {
         return Company::create([
+            'type' => Company::TYPE_CUSTOMER,
             'name' => 'PT Sembilan Jaya',
             'business_entity_type' => 'PT',
             'company_code' => 'SMB',
@@ -1419,5 +1424,82 @@ class CustomerDemoSeeder extends Seeder
 
             $idx++;
         }
+    }
+
+    /**
+     * Phase 2 super-admin FSD: review fields, pending & suspended customers.
+     */
+    private function seedPhase2AdminReviewAndStatuses(Company $mainCompany): void
+    {
+        $superAdmin = User::where('email', 'admin@sol.com')->first();
+
+        if ($superAdmin) {
+            $mainCompany->update([
+                'sales_pic_id' => $superAdmin->id,
+                'account_manager_id' => $superAdmin->id,
+                'review_notes' => 'Customer verified — Phase 2 super-admin demo seed.',
+                'reviewed_at' => now()->subDays(14),
+                'reviewed_by' => $superAdmin->id,
+                'billing_type' => 'postpaid',
+                'pricing_type' => 'standard',
+                'payment_term' => 'net_30',
+                'billing_cycle' => 'monthly',
+                'credit_limit' => 100000000,
+                'outstanding_balance' => 15000000,
+            ]);
+        }
+
+        $pending = Company::create([
+            'type' => Company::TYPE_CUSTOMER,
+            'name' => 'PT Menunggu Review',
+            'business_entity_type' => 'PT',
+            'company_code' => 'PND',
+            'npwp' => '03.456.789.0-123.000',
+            'email' => 'pending@customer.test',
+            'phone' => '0215550100',
+            'address' => 'Jl. Pending No. 1',
+            'city' => 'Jakarta',
+            'province' => 'DKI Jakarta',
+            'country' => 'Indonesia',
+            'status' => 'pending',
+            'billing_type' => 'prepaid',
+            'pricing_type' => 'standard',
+        ]);
+
+        CustomerLocation::create([
+            'company_id' => $pending->id,
+            'type' => LocationType::HeadOffice,
+            'name' => 'Pending HO',
+            'code' => 'PHO',
+            'country' => 'Indonesia',
+            'province' => 'DKI Jakarta',
+            'city' => 'Jakarta',
+            'address' => 'Jl. Pending No. 1',
+            'pic_name' => 'Pending PIC',
+            'pic_email' => 'pic@pending.test',
+            'pic_mobile' => '081234567890',
+            'status' => LocationStatus::Active,
+        ]);
+
+        Company::create([
+            'type' => Company::TYPE_CUSTOMER,
+            'name' => 'PT Suspended Demo',
+            'business_entity_type' => 'PT',
+            'company_code' => 'SPD',
+            'npwp' => '04.567.890.1-234.000',
+            'email' => 'suspended@customer.test',
+            'phone' => '0215550200',
+            'address' => 'Jl. Suspended No. 2',
+            'city' => 'Surabaya',
+            'province' => 'Jawa Timur',
+            'country' => 'Indonesia',
+            'status' => 'suspended',
+            'billing_type' => 'postpaid',
+            'pricing_type' => 'discount',
+            'discount_percent' => 5,
+            'payment_term' => 'net_14',
+            'billing_cycle' => 'semi_monthly',
+            'credit_limit' => 50000000,
+        ]);
     }
 }

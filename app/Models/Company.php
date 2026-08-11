@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -39,6 +40,11 @@ class Company extends Model
         'pic_email',
         'pic_mobile',
         'status',
+        'sales_pic_id',
+        'account_manager_id',
+        'review_notes',
+        'reviewed_at',
+        'reviewed_by',
         'billing_cycle',
         'payment_type',
         'postpaid_term_days',
@@ -127,6 +133,21 @@ class Company extends Model
     public function customerLocations(): HasMany
     {
         return $this->hasMany(CustomerLocation::class);
+    }
+
+    public function salesPic(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'sales_pic_id');
+    }
+
+    public function accountManager(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'account_manager_id');
+    }
+
+    public function reviewedByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
     }
 
     public function activities(): MorphMany

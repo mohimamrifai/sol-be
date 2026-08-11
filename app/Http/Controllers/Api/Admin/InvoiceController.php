@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
+use App\Models\Shipment;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,6 +12,73 @@ use Illuminate\Validation\Rule;
 
 class InvoiceController extends Controller
 {
+    public function stats(): JsonResponse
+    {
+        $counts = Invoice::query()
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        return response()->json([
+            'data' => [
+                'draft' => (int) ($counts['draft'] ?? 0),
+                'issued' => (int) ($counts['issued'] ?? 0),
+                'partially_paid' => (int) ($counts['partially_paid'] ?? 0),
+                'paid' => (int) ($counts['paid'] ?? 0),
+                'cancelled' => (int) ($counts['cancelled'] ?? 0),
+            ],
+        ]);
+    }
+
+    public function eligibleShipments(Request $request): JsonResponse
+    {
+        $query = Shipment::query()
+            ->with(['company:id,name', 'booking:id,booking_number'])
+            ->where('status', 'completed')
+            ->whereDoesntHave('invoice')
+            ->whereDoesntHave('booking', fn ($q) => $q->where('status', 'cancelled'));
+
+        if ($request->filled('company_id')) {
+            $query->where('company_id', $request->company_id);
+        }
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where(function ($q) use ($s) {
+                $q->where('shipment_number', 'like', "%{$s}%")
+                    ->orWhere('waybill_number', 'like', "%{$s}%")
+                    ->orWhereHas('company', fn ($cq) => $cq->where('name', 'like', "%{$s}%"));
+            });
+        }
+
+        return response()->json($query->orderByDesc('updated_at')->paginate($request->per_page ?? 15));
+    }
+
+    public function issue(Request $request, Invoice $invoice): JsonResponse
+    {
+        if ($invoice->status !== 'draft') {
+            return response()->json(['message' => 'Hanya invoice draft yang dapat diterbitkan.'], 422);
+        }
+
+        $data = $request->validate([
+            'issued_date' => 'nullable|date',
+            'due_date' => 'nullable|date',
+        ]);
+
+        $issuedDate = $data['issued_date'] ?? now()->toDateString();
+        $dueDate = $data['due_date'] ?? ($invoice->due_date?->toDateString() ?? now()->addDays(30)->toDateString());
+
+        $invoice->update([
+            'status' => 'issued',
+            'issued_date' => $issuedDate,
+            'due_date' => $dueDate,
+        ]);
+
+        return response()->json([
+            'message' => 'Invoice berhasil diterbitkan.',
+            'data' => $invoice->fresh(['company', 'shipment', 'items']),
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Invoice::with(['company:id,name', 'shipment:id,shipment_number,waybill_number']);
@@ -31,7 +99,23 @@ class InvoiceController extends Controller
         }
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where('invoice_number', 'like', "%{$s}%");
+            $query->where(function ($q) use ($s) {
+                $q->where('invoice_number', 'like', "%{$s}%")
+                    ->orWhereHas('shipment', fn ($sq) => $sq->where('shipment_number', 'like', "%{$s}%")
+                        ->orWhere('waybill_number', 'like', "%{$s}%"));
+            });
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('issued_date', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('issued_date', '<=', $request->date_to);
+        }
+        if ($request->filled('due_from')) {
+            $query->whereDate('due_date', '>=', $request->due_from);
+        }
+        if ($request->filled('due_to')) {
+            $query->whereDate('due_date', '<=', $request->due_to);
         }
 
         return response()->json($query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15));

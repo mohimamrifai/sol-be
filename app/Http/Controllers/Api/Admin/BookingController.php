@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\CargoCategory;
 use App\Models\Shipment;
+use App\Models\User;
 use App\Services\BookingPriceEstimateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,7 @@ class BookingController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Booking::with([
-            'company:id,name',
+            'company:id,name,company_code',
             'user:id,name',
             'originLocation:id,name,code',
             'destinationLocation:id,name,code',
@@ -28,22 +29,60 @@ class BookingController extends Controller
         ])->withExists('shipment');
 
         if ($request->filled('status')) {
-            $query->where('status', $request->status);
+            if ($request->status === 'converted') {
+                $query->whereHas('shipment');
+            } else {
+                $query->where('status', $request->status)->whereDoesntHave('shipment');
+            }
         }
         if ($request->filled('company_id')) {
             $query->where('company_id', $request->company_id);
+        }
+        if ($request->filled('service_type_id')) {
+            $query->where('service_type_id', $request->service_type_id);
+        }
+        if ($request->filled('shipment_coverage')) {
+            $query->where('shipment_coverage', $request->shipment_coverage);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date_to);
         }
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('booking_number', 'like', "%{$search}%")
-                    ->orWhere('cargo_description', 'like', "%{$search}%");
+                    ->orWhere('cargo_description', 'like', "%{$search}%")
+                    ->orWhereHas('company', fn ($cq) => $cq->where('name', 'like', "%{$search}%"));
             });
         }
 
         return response()->json(
             $query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15)
         );
+    }
+
+    public function stats(): JsonResponse
+    {
+        $counts = Booking::query()
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        $converted = Booking::whereHas('shipment')->count();
+
+        return response()->json([
+            'data' => [
+                'draft' => (int) ($counts['draft'] ?? 0),
+                'submitted' => (int) ($counts['submitted'] ?? 0),
+                'confirmed' => (int) ($counts['approved'] ?? 0),
+                'converted' => $converted,
+                'rejected' => (int) ($counts['rejected'] ?? 0),
+                'cancelled' => (int) ($counts['cancelled'] ?? 0),
+            ],
+        ]);
     }
 
     public function show(Booking $booking): JsonResponse
@@ -53,6 +92,7 @@ class BookingController extends Controller
             'originLocation', 'destinationLocation',
             'transportMode', 'serviceType', 'containerType',
             'additionalServices', 'shipment', 'approvedByUser:id,name',
+            'activities.actor:id,name',
         ]);
         $booking->setAttribute('has_shipment', $booking->shipment()->exists());
 
@@ -318,16 +358,17 @@ class BookingController extends Controller
     }
 
     /**
-     * Setujui booking.
+     * Konfirmasi booking (FSD: Submitted → Confirmed).
      */
     public function approve(Request $request, Booking $booking): JsonResponse
     {
         if (! in_array($booking->status, ['submitted', 'confirmed'])) {
-            return response()->json(['message' => 'Booking tidak dalam status yang bisa disetujui.'], 422);
+            return response()->json(['message' => 'Booking tidak dalam status yang bisa dikonfirmasi.'], 422);
         }
 
-        $shipment = null;
-        $alreadyHadShipment = $booking->shipment()->exists();
+        if ($booking->shipment()->exists()) {
+            return response()->json(['message' => 'Booking sudah dikonversi menjadi shipment.'], 422);
+        }
 
         $booking->update([
             'status' => 'approved',
@@ -335,41 +376,47 @@ class BookingController extends Controller
             'approved_at' => now(),
         ]);
 
-        if (! $alreadyHadShipment) {
-            $shipment = Shipment::create([
-                'booking_id' => $booking->id,
-                'company_id' => $booking->company_id,
-                'origin_location_id' => $booking->origin_location_id,
-                'destination_location_id' => $booking->destination_location_id,
-                'transport_mode_id' => $booking->transport_mode_id,
-                'service_type_id' => $booking->service_type_id,
-                'shipment_coverage' => $booking->shipment_coverage,
-                'status' => 'created',
-                'created_by' => $request->user()->id,
-                'cargo_category_id' => $booking->cargo_category_id,
-                'is_dangerous_goods' => $booking->is_dangerous_goods,
-                'dg_class_id' => $booking->dg_class_id,
-                'un_number' => $booking->un_number,
-                'msds_file' => $booking->msds_file,
-                'equipment_condition' => $booking->equipment_condition,
-                'temperature' => $booking->temperature,
-                'shipper_snapshot' => $this->buildShipperSnapshot($booking),
-                'consignee_snapshot' => $this->buildConsigneeSnapshot($booking),
-            ]);
-
-            $shipment->trackings()->create([
-                'status' => 'created',
-                'notes' => 'Shipment otomatis dibuat saat booking '.$booking->booking_number.' disetujui.',
-                'tracked_at' => now(),
-                'updated_by' => $request->user()->id,
-            ]);
-        }
+        $this->logBookingActivity($booking, 'booking_confirmed', 'Booking dikonfirmasi.', $request->user());
 
         return response()->json([
-            'message' => 'Booking berhasil disetujui dan otomatis dikonversi menjadi Shipment.',
-            'data' => $booking->fresh(['shipment']),
-            'shipment' => $shipment?->load('trackings'),
+            'message' => 'Booking berhasil dikonfirmasi.',
+            'data' => $booking->fresh(['shipment', 'approvedByUser:id,name']),
         ]);
+    }
+
+    public function confirm(Request $request, Booking $booking): JsonResponse
+    {
+        return $this->approve($request, $booking);
+    }
+
+    public function submit(Request $request, Booking $booking): JsonResponse
+    {
+        if ($booking->status !== 'draft') {
+            return response()->json(['message' => 'Hanya booking draft yang dapat disubmit.'], 422);
+        }
+
+        $booking->update(['status' => 'submitted']);
+        $this->logBookingActivity($booking, 'booking_submitted', 'Booking disubmit.', $request->user());
+
+        return response()->json([
+            'message' => 'Booking berhasil disubmit.',
+            'data' => $booking,
+        ]);
+    }
+
+    public function destroy(Booking $booking): JsonResponse
+    {
+        if ($booking->shipment()->exists()) {
+            return response()->json(['message' => 'Booking yang sudah dikonversi tidak dapat dihapus.'], 422);
+        }
+
+        if (! in_array($booking->status, ['draft', 'cancelled', 'rejected'])) {
+            return response()->json(['message' => 'Hanya booking draft yang dapat dihapus.'], 422);
+        }
+
+        $booking->delete();
+
+        return response()->json(['message' => 'Booking berhasil dihapus.']);
     }
 
     /**
@@ -437,10 +484,17 @@ class BookingController extends Controller
             'updated_by' => $request->user()->id,
         ]);
 
+        $this->logBookingActivity($booking, 'booking_converted', 'Booking dikonversi menjadi shipment.', $request->user());
+
         return response()->json([
             'message' => 'Shipment berhasil dibuat dari booking.',
             'data' => $shipment->load(['booking', 'trackings']),
         ], 201);
+    }
+
+    private function logBookingActivity(Booking $booking, string $type, string $title, ?User $actor): void
+    {
+        $booking->recordActivity($type, $title, null, null, $actor);
     }
 
     private function buildShipperSnapshot(Booking $booking): array

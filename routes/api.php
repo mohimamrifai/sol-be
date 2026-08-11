@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Admin\BookingController as AdminBookingController;
 use App\Http\Controllers\Api\Admin\BranchController;
 use App\Http\Controllers\Api\Admin\CompanyController;
 use App\Http\Controllers\Api\Admin\CustomerDiscountController;
+use App\Http\Controllers\Api\Admin\CustomerLocationController as AdminCustomerLocationController;
 use App\Http\Controllers\Api\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Api\Admin\InvoiceController as AdminInvoiceController;
 use App\Http\Controllers\Api\Admin\MasterDataController;
@@ -97,9 +98,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
 
         // Customer Management
+        Route::get('companies/stats', [CompanyController::class, 'stats']);
         Route::apiResource('companies', CompanyController::class);
         Route::post('companies/{company}/approve', [CompanyController::class, 'approve']);
         Route::post('companies/{company}/reject', [CompanyController::class, 'reject']);
+        Route::post('companies/{company}/suspend', [CompanyController::class, 'suspend']);
+        Route::get('companies/{company}/locations', [AdminCustomerLocationController::class, 'index']);
+        Route::post('companies/{company}/locations', [AdminCustomerLocationController::class, 'store']);
+        Route::put('companies/{company}/locations/{location}', [AdminCustomerLocationController::class, 'update']);
+        Route::post('companies/{company}/locations/{location}/status', [AdminCustomerLocationController::class, 'changeStatus']);
+        Route::delete('companies/{company}/locations/{location}', [AdminCustomerLocationController::class, 'destroy']);
         // Branch Management (nested under company)
         Route::get('companies/{company}/branches', [BranchController::class, 'index']);
         Route::post('companies/{company}/branches', [BranchController::class, 'store']);
@@ -183,16 +191,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('additional-charges/{additionalCharge}', [MasterDataController::class, 'destroyAdditionalCharge']);
 
         // Booking Management
+        Route::get('bookings/stats', [AdminBookingController::class, 'stats']);
         Route::get('bookings', [AdminBookingController::class, 'index']);
         Route::post('bookings', [AdminBookingController::class, 'store']);
         Route::post('bookings/estimate-price', [AdminBookingController::class, 'estimatePrice']);
         Route::get('bookings/{booking}', [AdminBookingController::class, 'show']);
         Route::put('bookings/{booking}', [AdminBookingController::class, 'update']);
+        Route::delete('bookings/{booking}', [AdminBookingController::class, 'destroy']);
+        Route::post('bookings/{booking}/submit', [AdminBookingController::class, 'submit']);
         Route::post('bookings/{booking}/approve', [AdminBookingController::class, 'approve']);
+        Route::post('bookings/{booking}/confirm', [AdminBookingController::class, 'confirm']);
         Route::post('bookings/{booking}/reject', [AdminBookingController::class, 'reject']);
         Route::post('bookings/{booking}/convert-to-shipment', [AdminBookingController::class, 'convertToShipment']);
 
         // Shipment Management
+        Route::get('shipments/stats', [AdminShipmentController::class, 'stats']);
         Route::get('shipments', [AdminShipmentController::class, 'index']);
         Route::get('shipments/{shipment}', [AdminShipmentController::class, 'show']);
         Route::put('shipments/{shipment}', [AdminShipmentController::class, 'update']);
@@ -210,17 +223,23 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('shipments/{shipment}/waybill-pdf', [AdminShipmentController::class, 'downloadWaybillPdf']);
 
         // Invoice Management
+        Route::get('invoices/stats', [AdminInvoiceController::class, 'stats']);
+        Route::get('invoices/eligible-shipments', [AdminInvoiceController::class, 'eligibleShipments']);
         Route::get('invoices', [AdminInvoiceController::class, 'index']);
         Route::get('invoices/{invoice}', [AdminInvoiceController::class, 'show']);
         Route::get('invoices/{invoice}/pdf', [AdminInvoiceController::class, 'downloadPdf']);
         Route::post('invoices', [AdminInvoiceController::class, 'store']);
         Route::put('invoices/{invoice}', [AdminInvoiceController::class, 'update']);
+        Route::post('invoices/{invoice}/issue', [AdminInvoiceController::class, 'issue']);
         Route::delete('invoices/{invoice}', [AdminInvoiceController::class, 'destroy']);
         Route::post('invoices/{invoice}/generate-payment-link', [AdminPaymentController::class, 'generatePaymentLink']);
 
         // Payment / AR Management
+        Route::get('payments/stats', [AdminPaymentController::class, 'stats']);
+        Route::get('payments/eligible-invoices', [AdminPaymentController::class, 'eligibleInvoices']);
         Route::get('payments', [AdminPaymentController::class, 'index']);
         Route::get('payments/overdue-invoices', [AdminPaymentController::class, 'overdueInvoices']);
+        Route::post('invoices/{invoice}/record-payment', [AdminPaymentController::class, 'recordPayment']);
         Route::post('payments/{payment}/sync-midtrans', [AdminPaymentController::class, 'syncMidtrans']);
         Route::post('payments/{payment}/verify-manual', [AdminPaymentController::class, 'verifyManual']);
         Route::get('payments/{payment}', [AdminPaymentController::class, 'show']);

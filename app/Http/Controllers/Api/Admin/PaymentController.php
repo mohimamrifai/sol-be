@@ -7,12 +7,141 @@ use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
 use App\Services\MidtransService;
+use App\Services\PaymentNumberService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 
 class PaymentController extends Controller
 {
+    public function __construct(
+        private PaymentNumberService $paymentNumber,
+    ) {}
+
+    public function stats(): JsonResponse
+    {
+        $today = Carbon::today();
+        $base = Invoice::query();
+
+        $paid = (clone $base)->where('status', 'paid')->count();
+        $partiallyPaid = (clone $base)->where('status', 'partially_paid')->count();
+        $unpaid = (clone $base)->where('status', 'issued')->count();
+        $overdue = (clone $base)
+            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereNotNull('due_date')
+            ->where('due_date', '<', $today)
+            ->count();
+
+        return response()->json([
+            'data' => [
+                'unpaid' => $unpaid,
+                'partially_paid' => $partiallyPaid,
+                'paid' => $paid,
+                'overdue' => $overdue,
+            ],
+        ]);
+    }
+
+    public function eligibleInvoices(Request $request): JsonResponse
+    {
+        $query = Invoice::query()
+            ->with(['company:id,name,company_code'])
+            ->whereIn('status', ['issued', 'partially_paid'])
+            ->where('status', '!=', 'cancelled');
+
+        if ($request->filled('company_id')) {
+            $query->where('company_id', $request->company_id);
+        }
+        if ($request->filled('search')) {
+            $s = $request->search;
+            $query->where('invoice_number', 'like', "%{$s}%");
+        }
+
+        $paginated = $query->orderBy('due_date')->paginate($request->per_page ?? 15);
+        $paginated->getCollection()->transform(function (Invoice $invoice) {
+            $outstanding = $invoice->outstandingAmount();
+
+            return [
+                'id' => $invoice->id,
+                'invoice_number' => $invoice->invoice_number,
+                'company' => $invoice->company,
+                'due_date' => $invoice->due_date?->toDateString(),
+                'total_amount' => (float) $invoice->total_amount,
+                'outstanding_amount' => $outstanding,
+                'status' => $invoice->status,
+            ];
+        });
+
+        return response()->json($paginated);
+    }
+
+    public function recordPayment(Request $request, Invoice $invoice): JsonResponse
+    {
+        if (! $request->user()?->can('manage_payments')) {
+            return response()->json(['message' => 'Tidak ada izin untuk mencatat pembayaran.'], 403);
+        }
+
+        if (! in_array($invoice->status, ['issued', 'partially_paid'], true)) {
+            return response()->json(['message' => 'Invoice tidak dapat dibayar.'], 422);
+        }
+
+        $data = $request->validate([
+            'payment_method' => 'required|in:transfer,giro,cash,virtual_account,midtrans',
+            'company_bank' => 'nullable|string|max:120',
+            'account' => 'nullable|string|max:120',
+            'payment_date' => 'required|date',
+            'payment_amount' => 'required|numeric|min:0.01',
+            'payment_reference_no' => 'required|string|max:120',
+            'payment_remark' => 'nullable|string|max:2000',
+        ]);
+
+        $outstanding = $invoice->outstandingAmount();
+        if ($data['payment_amount'] > $outstanding) {
+            return response()->json(['message' => 'Jumlah pembayaran melebihi outstanding.'], 422);
+        }
+
+        $paymentNumber = $this->paymentNumber->next((int) $invoice->company_id);
+
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'payment_number' => $paymentNumber,
+            'amount' => $data['payment_amount'],
+            'method' => $data['payment_method'],
+            'payment_type' => 'manual_admin',
+            'status' => 'success',
+            'paid_at' => Carbon::parse($data['payment_date']),
+            'manual_reference_number' => $data['payment_reference_no'],
+            'manual_status' => Payment::MANUAL_VERIFIED,
+            'manual_verified_at' => now(),
+            'manual_verified_by' => $request->user()->id,
+            'midtrans_response' => [
+                'company_bank' => $data['company_bank'] ?? null,
+                'account' => $data['account'] ?? null,
+                'remark' => $data['payment_remark'] ?? null,
+                'recorded_by_admin' => true,
+            ],
+        ]);
+
+        $invoice->syncStatusFromPayments();
+
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $request->user()->id,
+                'event_key' => 'payment_recorded',
+                'description' => 'Pembayaran dicatat oleh admin.',
+                'meta' => ['amount' => (float) $data['payment_amount']],
+                'occurred_at' => now(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Pembayaran berhasil dicatat.',
+            'data' => $payment->load(['invoice.company']),
+        ], 201);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Payment::with([

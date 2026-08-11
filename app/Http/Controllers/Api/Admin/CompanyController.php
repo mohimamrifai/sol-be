@@ -8,12 +8,15 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class CompanyController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Company::query()->withCount(['users', 'branches', 'bookings']);
+        $query = Company::query()
+            ->customer()
+            ->withCount(['users', 'customerLocations', 'bookings']);
 
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -23,8 +26,8 @@ class CompanyController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('company_code', 'like', "%{$search}%")
                     ->orWhere('npwp', 'like', "%{$search}%")
-                    ->orWhere('nib', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%");
             });
         }
@@ -35,32 +38,29 @@ class CompanyController extends Controller
         return response()->json($companies);
     }
 
+    public function stats(): JsonResponse
+    {
+        $base = Company::query()->customer();
+        $counts = (clone $base)->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
+
+        return response()->json([
+            'data' => [
+                'total' => (clone $base)->count(),
+                'pending' => (int) ($counts['pending'] ?? 0),
+                'active' => (int) ($counts['active'] ?? 0),
+                'suspended' => (int) ($counts['suspended'] ?? 0),
+                'inactive' => (int) ($counts['inactive'] ?? 0),
+                'rejected' => (int) ($counts['rejected'] ?? 0),
+            ],
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'name' => 'required|string|max:255|unique:companies,name',
-            'business_entity_type' => 'nullable|string|max:20|in:PT,CV,Firma,UD,Koperasi,Yayasan,Lainnya',
-            'company_code' => 'nullable|string|max:10|unique:companies,company_code',
-            'npwp' => 'nullable|string|max:30',
-            'nib' => 'nullable|string|max:30',
-            'address' => 'nullable|string',
-            'city' => 'nullable|string|max:255',
-            'province' => 'nullable|string|max:255',
-            'postal_code' => 'nullable|string|max:10',
-            'contact_person' => 'nullable|string|max:255',
-            'email' => 'nullable|email|max:255',
-            'phone' => 'nullable|string|max:20',
-            'status' => 'nullable|in:pending,active,inactive',
-            'billing_cycle' => 'required|in:half_monthly_1,half_monthly_2,both_half,end_of_month',
-            'payment_type' => 'required|in:prepaid,postpaid',
-            'postpaid_term_days' => 'nullable|integer|min:0|max:365',
+        $validated = $request->validate($this->companyRules());
 
-            // PIC / User Login fields
-            'pic_name' => 'nullable|string|max:255',
-            'pic_email' => 'nullable|email|max:255|unique:users,email',
-            'pic_phone' => 'nullable|string|max:20',
-            'password' => 'nullable|string|min:8',
-        ]);
+        $validated['type'] = Company::TYPE_CUSTOMER;
+        $validated['status'] = $validated['status'] ?? 'pending';
 
         $company = Company::create($validated);
 
@@ -78,14 +78,25 @@ class CompanyController extends Controller
         }
 
         return response()->json([
-            'message' => 'Perusahaan berhasil dibuat.',
+            'message' => 'Customer berhasil dibuat.',
             'data' => $company,
         ], 201);
     }
 
     public function show(Company $company): JsonResponse
     {
-        $company->load(['branches', 'users.roles', 'customerDiscounts']);
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
+        $company->load([
+            'users.roles',
+            'customerLocations',
+            'customerDiscounts',
+            'salesPic:id,name,email',
+            'accountManager:id,name,email',
+            'reviewedByUser:id,name,email',
+        ]);
         $company->loadCount(['bookings', 'invoices']);
 
         return response()->json(['data' => $company]);
@@ -93,63 +104,68 @@ class CompanyController extends Controller
 
     public function update(Request $request, Company $company): JsonResponse
     {
-        $validated = $request->validate([
-            'name' => sprintf('sometimes|string|max:255|unique:companies,name,%d', $company->id),
-            'business_entity_type' => 'nullable|string|max:20|in:PT,CV,Firma,UD,Koperasi,Yayasan,Lainnya',
-            'company_code' => sprintf('nullable|string|max:10|unique:companies,company_code,%d', $company->id),
-            'npwp' => 'nullable|string|max:30',
-            'nib' => 'nullable|string|max:30',
-            'address' => 'nullable|string',
-            'city' => 'nullable|string|max:255',
-            'province' => 'nullable|string|max:255',
-            'postal_code' => 'nullable|string|max:10',
-            'contact_person' => 'nullable|string|max:255',
-            'email' => 'nullable|email|max:255',
-            'phone' => 'nullable|string|max:20',
-            'billing_cycle' => 'required|in:half_monthly_1,half_monthly_2,both_half,end_of_month',
-            'payment_type' => 'sometimes|required|in:prepaid,postpaid',
-            'postpaid_term_days' => 'nullable|integer|min:0|max:365',
-        ]);
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
+        $validated = $request->validate($this->companyRules($company->id, partial: true));
+
+        if (isset($validated['status']) && $validated['status'] === 'active' && ! $company->reviewed_at) {
+            $validated['reviewed_at'] = now();
+            $validated['reviewed_by'] = $request->user()?->id;
+        }
 
         $company->update($validated);
 
         return response()->json([
-            'message' => 'Perusahaan berhasil diperbarui.',
-            'data' => $company,
+            'message' => 'Customer berhasil diperbarui.',
+            'data' => $company->fresh([
+                'salesPic:id,name,email',
+                'accountManager:id,name,email',
+                'reviewedByUser:id,name,email',
+            ]),
         ]);
     }
 
     public function destroy(Company $company): JsonResponse
     {
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
         $company->delete();
 
-        return response()->json(['message' => 'Perusahaan berhasil dihapus.']);
+        return response()->json(['message' => 'Customer berhasil dihapus.']);
     }
 
-    /**
-     * Setujui / aktivasi perusahaan beserta semua user-nya.
-     */
     public function approve(Company $company): JsonResponse
     {
-        $company->update(['status' => 'active']);
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
+        $company->update([
+            'status' => 'active',
+            'reviewed_at' => $company->reviewed_at ?? now(),
+            'reviewed_by' => $company->reviewed_by ?? auth()->id(),
+        ]);
 
         User::where('company_id', $company->id)
             ->where('status', '!=', 'active')
             ->update(['status' => 'active']);
 
         return response()->json([
-            'message' => 'Perusahaan berhasil diaktifkan.',
-            'data' => $company,
+            'message' => 'Customer berhasil diaktifkan.',
+            'data' => $company->fresh(),
         ]);
     }
 
-    /**
-     * Tolak / reject registrasi perusahaan.
-     * - companies.status = 'rejected'
-     * - semua user di-nonaktifkan (status = 'inactive') dan token dicabut.
-     */
     public function reject(Request $request, Company $company): JsonResponse
     {
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
         $validated = $request->validate([
             'reason' => 'required|string|max:500',
         ]);
@@ -162,16 +178,78 @@ class CompanyController extends Controller
             if ($user->status !== 'inactive') {
                 $user->update(['status' => 'inactive']);
             }
-            // Revoke all tokens so they are logged out immediately.
             $user->tokens()->delete();
         }
 
         return response()->json([
-            'message' => 'Perusahaan berhasil ditolak.',
+            'message' => 'Customer berhasil ditolak.',
             'data' => [
                 'company' => $company->fresh(),
                 'reason' => $validated['reason'],
             ],
         ]);
+    }
+
+    public function suspend(Company $company): JsonResponse
+    {
+        if (! $company->isCustomer()) {
+            abort(404);
+        }
+
+        if ($company->status !== 'active') {
+            return response()->json(['message' => 'Hanya customer aktif yang dapat di-suspend.'], 422);
+        }
+
+        $company->update(['status' => 'suspended']);
+
+        return response()->json([
+            'message' => 'Customer berhasil di-suspend.',
+            'data' => $company,
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function companyRules(?int $companyId = null, bool $partial = false): array
+    {
+        $sometimes = $partial ? 'sometimes|' : '';
+
+        return [
+            'name' => $sometimes.'required|string|max:255|'.Rule::unique('companies', 'name')->ignore($companyId),
+            'business_entity_type' => 'nullable|string|max:20|in:PT,CV,UD,Koperasi,Yayasan,Firma,Perorangan,Lainnya',
+            'business_entity_other' => 'nullable|string|max:255',
+            'company_code' => 'nullable|string|size:3|alpha|'.Rule::unique('companies', 'company_code')->ignore($companyId),
+            'npwp' => 'nullable|string|max:16',
+            'address' => 'nullable|string',
+            'city' => 'nullable|string|max:255',
+            'province' => 'nullable|string|max:255',
+            'country' => 'nullable|string|max:80',
+            'district' => 'nullable|string|max:120',
+            'postal_code' => 'nullable|string|max:20',
+            'business_category' => 'nullable|string|max:50',
+            'business_category_other' => 'nullable|string|max:255',
+            'monthly_shipment_estimate' => 'nullable|string|max:30',
+            'contact_person' => 'nullable|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'phone' => 'nullable|string|max:20',
+            'website' => 'nullable|string|max:255',
+            'status' => 'nullable|in:pending,active,suspended,inactive,rejected',
+            'billing_type' => 'nullable|in:prepaid,postpaid',
+            'pricing_type' => 'nullable|in:standard,discount',
+            'discount_percent' => 'nullable|numeric|min:0|max:100',
+            'billing_cycle' => 'nullable|in:per_shipment,semi_monthly,monthly,half_monthly_1,half_monthly_2,both_half,end_of_month',
+            'payment_term' => 'nullable|in:cod,net_7,net_14,net_30,net_45,net_60',
+            'credit_limit' => 'nullable|numeric|min:0',
+            'payment_type' => 'nullable|in:prepaid,postpaid',
+            'postpaid_term_days' => 'nullable|integer|min:0|max:365',
+            'sales_pic_id' => 'nullable|exists:users,id',
+            'account_manager_id' => 'nullable|exists:users,id',
+            'review_notes' => 'nullable|string|max:5000',
+            'pic_name' => 'nullable|string|max:255',
+            'pic_email' => 'nullable|email|max:255|'.Rule::unique('users', 'email'),
+            'pic_phone' => 'nullable|string|max:20',
+            'password' => 'nullable|string|min:8',
+        ];
     }
 }
