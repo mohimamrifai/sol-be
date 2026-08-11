@@ -37,7 +37,16 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_reports', 'export_reports', 'view_dashboard', 'view_analytics',
             'manage_branches', 'manage_documents', 'view_documents', 'manage_notifications',
             'view_audit_log', 'view_vendors', 'view_pricing', 'edit_pricing',
-            'view_containers', 'edit_containers', 'manage_tracking_photos',
+            'view_containers', 'edit_containers', 'manage_containers', 'manage_tracking_photos',
+            // Operations (FSD)
+            'view_operations', 'manage_operations',
+            // Vendor admin (FSD)
+            'view_vendor_job_orders_admin', 'manage_vendor_job_orders_admin',
+            'view_vendor_invoices_admin', 'manage_vendor_invoices_admin',
+            'view_vendor_payments_admin', 'manage_vendor_payments_admin',
+            // Settings (FSD)
+            'manage_roles', 'view_settings', 'manage_settings',
+            'manage_numbering', 'manage_system_config',
             // Granular customer permissions (FSD Users → Default Role)
             'view_company', 'manage_company',
             'view_locations', 'manage_locations',
@@ -65,7 +74,12 @@ class RolesAndPermissionsSeeder extends Seeder
         $operations->givePermissionTo([
             'view_companies', 'view_bookings', 'approve_bookings', 'reject_bookings',
             'view_shipments', 'create_shipments', 'edit_shipments', 'update_tracking',
-            'view_invoices',
+            'view_invoices', 'view_dashboard',
+            'view_containers', 'edit_containers', 'manage_containers',
+            'view_operations', 'manage_operations',
+            'view_vendor_job_orders_admin',
+            'view_reports', 'export_reports',
+            'manage_master_data',
         ]);
 
         $finance = Role::firstOrCreate(['name' => 'finance', 'guard_name' => 'web']);
@@ -73,13 +87,18 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_companies', 'view_bookings', 'view_shipments',
             'view_invoices', 'create_invoices', 'edit_invoices',
             'view_payments', 'manage_payments',
+            'view_dashboard',
+            'view_vendor_invoices_admin', 'manage_vendor_invoices_admin',
+            'view_vendor_payments_admin', 'manage_vendor_payments_admin',
+            'view_reports', 'export_reports',
         ]);
 
         $sales = Role::firstOrCreate(['name' => 'sales', 'guard_name' => 'web']);
         $sales->givePermissionTo([
             'view_companies', 'create_companies', 'edit_companies',
             'view_bookings', 'view_shipments', 'view_invoices',
-            'manage_pricing',
+            'manage_pricing', 'manage_vendors', 'view_pricing', 'edit_pricing',
+            'view_dashboard', 'manage_master_data',
         ]);
 
         // ── Roles Customer ──
