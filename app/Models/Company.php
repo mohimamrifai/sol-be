@@ -45,6 +45,8 @@ class Company extends Model
         'review_notes',
         'reviewed_at',
         'reviewed_by',
+        'approved_at',
+        'approved_by',
         'billing_cycle',
         'payment_type',
         'postpaid_term_days',
@@ -74,6 +76,7 @@ class Company extends Model
             'current_deposit_balance' => 'decimal:2',
             'outstanding_balance' => 'decimal:2',
             'service_categories' => 'array',
+            'approved_at' => 'datetime',
         ];
     }
 
@@ -148,6 +151,11 @@ class Company extends Model
     public function reviewedByUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    public function approvedByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
     }
 
     public function activities(): MorphMany

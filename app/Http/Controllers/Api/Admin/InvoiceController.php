@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
+use App\Models\InvoiceActivity;
 use App\Models\Shipment;
+use App\Services\InvoiceGenerationService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,6 +14,10 @@ use Illuminate\Validation\Rule;
 
 class InvoiceController extends Controller
 {
+    public function __construct(
+        private readonly InvoiceGenerationService $invoiceGeneration,
+    ) {}
+
     public function stats(): JsonResponse
     {
         $counts = Invoice::query()
@@ -33,7 +39,7 @@ class InvoiceController extends Controller
     public function eligibleShipments(Request $request): JsonResponse
     {
         $query = Shipment::query()
-            ->with(['company:id,name', 'booking:id,booking_number'])
+            ->with(['company:id,name', 'booking:id,booking_number', 'serviceType:id,name,code'])
             ->where('status', 'completed')
             ->whereDoesntHave('invoice')
             ->whereDoesntHave('booking', fn ($q) => $q->where('status', 'cancelled'));
@@ -50,7 +56,62 @@ class InvoiceController extends Controller
             });
         }
 
-        return response()->json($query->orderByDesc('updated_at')->paginate($request->per_page ?? 15));
+        $paginated = $query->orderByDesc('updated_at')->paginate($request->per_page ?? 15);
+        $paginated->getCollection()->transform(function (Shipment $shipment) {
+            $items = $this->invoiceGeneration->buildLineItemsFromShipment($shipment);
+            $subtotal = array_sum(array_map(fn ($i) => $i['quantity'] * $i['unit_price'], $items));
+
+            return array_merge($shipment->toArray(), [
+                'estimated_amount' => round(max(0, $subtotal) * 1.11, 2),
+            ]);
+        });
+
+        return response()->json($paginated);
+    }
+
+    public function previewLineItems(Shipment $shipment): JsonResponse
+    {
+        if ($shipment->invoice()->exists()) {
+            return response()->json(['message' => 'Shipment sudah memiliki invoice.'], 422);
+        }
+
+        $items = $this->invoiceGeneration->buildLineItemsFromShipment($shipment);
+        $subtotal = array_sum(array_map(fn ($i) => $i['quantity'] * $i['unit_price'], $items));
+
+        return response()->json([
+            'data' => [
+                'items' => $items,
+                'subtotal' => max(0, $subtotal),
+                'tax_amount' => round(max(0, $subtotal) * 0.11, 2),
+                'total_amount' => round(max(0, $subtotal) * 1.11, 2),
+            ],
+        ]);
+    }
+
+    public function generateFromShipment(Request $request, Shipment $shipment): JsonResponse
+    {
+        if ($shipment->status !== 'completed') {
+            return response()->json(['message' => 'Hanya shipment completed yang dapat di-invoice.'], 422);
+        }
+
+        if ($shipment->invoice()->exists()) {
+            return response()->json(['message' => 'Shipment sudah memiliki invoice.'], 422);
+        }
+
+        try {
+            $invoice = $this->invoiceGeneration->generateDraftInvoice(
+                $shipment,
+                $request->user(),
+                $request->input('status', 'draft')
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Invoice berhasil dibuat dari shipment.',
+            'data' => $invoice,
+        ], 201);
     }
 
     public function issue(Request $request, Invoice $invoice): JsonResponse
@@ -72,6 +133,13 @@ class InvoiceController extends Controller
             'issued_date' => $issuedDate,
             'due_date' => $dueDate,
         ]);
+
+        $this->logInvoiceActivity(
+            $invoice,
+            'invoice_issued',
+            'Invoice diterbitkan.',
+            $request->user()?->id
+        );
 
         return response()->json([
             'message' => 'Invoice berhasil diterbitkan.',
@@ -123,7 +191,7 @@ class InvoiceController extends Controller
 
     public function show(Invoice $invoice): JsonResponse
     {
-        $invoice->load(['company', 'shipment', 'items', 'payments', 'createdByUser:id,name']);
+        $invoice->load(['company', 'shipment', 'items', 'payments', 'createdByUser:id,name', 'activities.actorUser:id,name']);
 
         return response()->json(['data' => $invoice]);
     }
@@ -217,6 +285,12 @@ class InvoiceController extends Controller
             ]);
         }
 
+        if ($status === 'issued') {
+            $this->logInvoiceActivity($invoice, 'invoice_issued', 'Invoice diterbitkan.', $request->user()?->id);
+        } else {
+            $this->logInvoiceActivity($invoice, 'invoice_created', 'Invoice draft dibuat.', $request->user()?->id);
+        }
+
         return response()->json([
             'message' => 'Invoice berhasil dibuat.',
             'data' => $invoice->load('items'),
@@ -256,5 +330,16 @@ class InvoiceController extends Controller
         $pdf = Pdf::loadView('pdf.invoice', ['invoice' => $invoice]);
 
         return $pdf->download('invoice-'.$invoice->invoice_number.'.pdf');
+    }
+
+    private function logInvoiceActivity(Invoice $invoice, string $eventKey, string $description, ?int $actorUserId): void
+    {
+        InvoiceActivity::create([
+            'invoice_id' => $invoice->id,
+            'actor_user_id' => $actorUserId,
+            'event_key' => $eventKey,
+            'description' => $description,
+            'occurred_at' => now(),
+        ]);
     }
 }

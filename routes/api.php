@@ -123,6 +123,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // User Management
         Route::apiResource('users', UserController::class);
+        Route::patch('users/{user}/status', [UserController::class, 'changeStatus']);
+        Route::post('users/{user}/reset-password', [UserController::class, 'resetPassword']);
 
         // Role & Permission Management
         Route::get('roles', [RoleManagementController::class, 'index']);
@@ -203,14 +205,22 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('bookings/{booking}/confirm', [AdminBookingController::class, 'confirm']);
         Route::post('bookings/{booking}/reject', [AdminBookingController::class, 'reject']);
         Route::post('bookings/{booking}/convert-to-shipment', [AdminBookingController::class, 'convertToShipment']);
+        Route::post('bookings/{booking}/duplicate', [AdminBookingController::class, 'duplicate']);
+        Route::post('bookings/{booking}/attachments', [AdminBookingController::class, 'uploadAttachment']);
+        Route::delete('bookings/{booking}/attachments/{attachment}', [AdminBookingController::class, 'deleteAttachment']);
 
         // Shipment Management
         Route::get('shipments/stats', [AdminShipmentController::class, 'stats']);
         Route::get('shipments', [AdminShipmentController::class, 'index']);
         Route::get('shipments/{shipment}', [AdminShipmentController::class, 'show']);
         Route::put('shipments/{shipment}', [AdminShipmentController::class, 'update']);
+        Route::post('shipments/{shipment}/ready-for-departure', [AdminShipmentController::class, 'readyForDeparture']);
+        Route::post('shipments/{shipment}/cancel', [AdminShipmentController::class, 'cancelShipment']);
         Route::post('shipments/{shipment}/tracking', [AdminShipmentController::class, 'updateTracking']);
         Route::post('shipments/{shipment}/containers', [AdminShipmentController::class, 'addContainer']);
+        Route::get('shipments/{shipment}/available-containers', [AdminShipmentController::class, 'availableContainers']);
+        Route::post('shipments/{shipment}/containers/{container}/assign', [AdminShipmentController::class, 'assignContainerSlot']);
+        Route::post('shipments/{shipment}/register-vendor-container', [AdminShipmentController::class, 'registerVendorContainer']);
         Route::put('containers/{container}', [AdminShipmentController::class, 'updateContainer']);
         Route::delete('containers/{container}', [AdminShipmentController::class, 'destroyContainer']);
         Route::post('containers/{container}/racks', [AdminShipmentController::class, 'addRack']);
@@ -225,6 +235,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // Invoice Management
         Route::get('invoices/stats', [AdminInvoiceController::class, 'stats']);
         Route::get('invoices/eligible-shipments', [AdminInvoiceController::class, 'eligibleShipments']);
+        Route::get('shipments/{shipment}/invoice-preview', [AdminInvoiceController::class, 'previewLineItems']);
+        Route::post('shipments/{shipment}/generate-invoice', [AdminInvoiceController::class, 'generateFromShipment']);
         Route::get('invoices', [AdminInvoiceController::class, 'index']);
         Route::get('invoices/{invoice}', [AdminInvoiceController::class, 'show']);
         Route::get('invoices/{invoice}/pdf', [AdminInvoiceController::class, 'downloadPdf']);
@@ -236,12 +248,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Payment / AR Management
         Route::get('payments/stats', [AdminPaymentController::class, 'stats']);
+        Route::get('payments/options', [AdminPaymentController::class, 'paymentOptions']);
         Route::get('payments/eligible-invoices', [AdminPaymentController::class, 'eligibleInvoices']);
         Route::get('payments', [AdminPaymentController::class, 'index']);
         Route::get('payments/overdue-invoices', [AdminPaymentController::class, 'overdueInvoices']);
         Route::post('invoices/{invoice}/record-payment', [AdminPaymentController::class, 'recordPayment']);
         Route::post('payments/{payment}/sync-midtrans', [AdminPaymentController::class, 'syncMidtrans']);
         Route::post('payments/{payment}/verify-manual', [AdminPaymentController::class, 'verifyManual']);
+        Route::get('payments/{payment}/receipt', [AdminPaymentController::class, 'receipt']);
         Route::get('payments/{payment}', [AdminPaymentController::class, 'show']);
 
         // Vendor & Pricing Management

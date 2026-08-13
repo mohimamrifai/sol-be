@@ -91,11 +91,13 @@ class CompanyController extends Controller
 
         $company->load([
             'users.roles',
+            'users.locationAccess:id,code,name',
             'customerLocations',
             'customerDiscounts',
             'salesPic:id,name,email',
             'accountManager:id,name,email',
             'reviewedByUser:id,name,email',
+            'approvedByUser:id,name,email',
         ]);
         $company->loadCount(['bookings', 'invoices']);
 
@@ -115,6 +117,11 @@ class CompanyController extends Controller
             $validated['reviewed_by'] = $request->user()?->id;
         }
 
+        if (isset($validated['status']) && $validated['status'] === 'active' && ! $company->approved_at) {
+            $validated['approved_at'] = now();
+            $validated['approved_by'] = $request->user()?->id;
+        }
+
         $company->update($validated);
 
         return response()->json([
@@ -123,6 +130,7 @@ class CompanyController extends Controller
                 'salesPic:id,name,email',
                 'accountManager:id,name,email',
                 'reviewedByUser:id,name,email',
+                'approvedByUser:id,name,email',
             ]),
         ]);
     }
@@ -144,10 +152,27 @@ class CompanyController extends Controller
             abort(404);
         }
 
+        $activeHoCount = $company->customerLocations()
+            ->where('type', 'head_office')
+            ->where('status', 'active')
+            ->count();
+
+        if ($activeHoCount < 1) {
+            return response()->json([
+                'message' => 'Customer wajib memiliki minimal 1 Head Office aktif sebelum diaktifkan.',
+                'errors' => ['locations' => ['Tambahkan Head Office aktif pada tab Locations.']],
+            ], 422);
+        }
+
+        $now = now();
+        $approverId = auth()->id();
+
         $company->update([
             'status' => 'active',
-            'reviewed_at' => $company->reviewed_at ?? now(),
-            'reviewed_by' => $company->reviewed_by ?? auth()->id(),
+            'reviewed_at' => $company->reviewed_at ?? $now,
+            'reviewed_by' => $company->reviewed_by ?? $approverId,
+            'approved_at' => $company->approved_at ?? $now,
+            'approved_by' => $company->approved_by ?? $approverId,
         ]);
 
         User::where('company_id', $company->id)

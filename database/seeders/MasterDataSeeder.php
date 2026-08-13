@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\AdditionalService;
 use App\Models\CargoCategory;
+use App\Models\ContainerAsset;
 use App\Models\ContainerType;
 use App\Models\Location;
 use App\Models\ServiceType;
@@ -12,6 +13,7 @@ use App\Models\TrainCar;
 use App\Models\TransportMode;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class MasterDataSeeder extends Seeder
 {
@@ -24,6 +26,7 @@ class MasterDataSeeder extends Seeder
         $this->seedAdditionalServices();
         $this->seedTrains();
         $this->seedCargoCategories();
+        $this->seedContainerAssets();
     }
 
     private function seedLocations(): void
@@ -273,6 +276,37 @@ class MasterDataSeeder extends Seeder
 
         foreach ($rows as $row) {
             CargoCategory::firstOrCreate(['code' => $row['code']], array_merge($row, ['is_active' => true]));
+        }
+    }
+
+    private function seedContainerAssets(): void
+    {
+        if (! Schema::hasTable('container_assets')) {
+            return;
+        }
+
+        $type20 = ContainerType::where('size', '20ft')->first();
+        $type40 = ContainerType::where('size', '40ft')->first();
+        $yard = Location::orderBy('id')->first();
+
+        if (! $type20) {
+            return;
+        }
+
+        $samples = [
+            ['container_number' => 'SOLU001', 'container_type_id' => $type20->id, 'ownership' => 'company', 'max_payload_kg' => 21770, 'max_capacity_cbm' => 33.2],
+            ['container_number' => 'SOLU008', 'container_type_id' => $type20->id, 'ownership' => 'company', 'max_payload_kg' => 21770, 'max_capacity_cbm' => 33.2],
+            ['container_number' => 'SOLU015', 'container_type_id' => $type40?->id ?? $type20->id, 'ownership' => 'company', 'max_payload_kg' => 26680, 'max_capacity_cbm' => 67.7],
+        ];
+
+        foreach ($samples as $row) {
+            ContainerAsset::firstOrCreate(
+                ['container_number' => $row['container_number']],
+                array_merge($row, [
+                    'current_yard_id' => $yard?->id,
+                    'status' => 'available',
+                ])
+            );
         }
     }
 }

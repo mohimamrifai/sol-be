@@ -13,7 +13,13 @@ class Container extends Model
 
     protected $fillable = [
         'shipment_id', 'container_type_id', 'container_number', 'seal_number',
+        'ownership', 'assignment_status', 'container_asset_id', 'slot_sequence', 'remark',
     ];
+
+    public function containerAsset(): BelongsTo
+    {
+        return $this->belongsTo(ContainerAsset::class);
+    }
 
     public function shipment(): BelongsTo
     {

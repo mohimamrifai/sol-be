@@ -7,6 +7,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (DB::getDriverName() === 'sqlite') {
+            return;
+        }
+
         DB::statement("ALTER TABLE companies MODIFY COLUMN billing_cycle ENUM(
             'per_shipment',
             'semi_monthly',
@@ -20,6 +24,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() === 'sqlite') {
+            return;
+        }
+
         DB::statement("UPDATE companies SET billing_cycle = 'end_of_month' WHERE billing_cycle IN ('per_shipment', 'semi_monthly', 'monthly')");
 
         DB::statement("ALTER TABLE companies MODIFY COLUMN billing_cycle ENUM(

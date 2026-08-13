@@ -52,6 +52,11 @@ class Shipment extends Model
         'is_dangerous_goods', 'dg_class_id', 'un_number', 'msds_file',
         'equipment_condition', 'temperature',
         'notes', 'cancelled_reason', 'created_by',
+        'internal_pic_id', 'train_id', 'origin_yard_id', 'destination_yard_id', 'planning_notes',
+        'pickup_vendor_id', 'pickup_vehicle_type', 'pickup_vehicle_plate',
+        'pickup_driver_name', 'pickup_driver_mobile', 'pickup_vendor_pic', 'pickup_scheduled_at', 'pickup_remark',
+        'delivery_vendor_id', 'delivery_vehicle_type', 'delivery_vehicle_plate',
+        'delivery_driver_name', 'delivery_driver_mobile', 'delivery_vendor_pic', 'delivery_scheduled_at', 'delivery_remark',
         'shipper_snapshot', 'consignee_snapshot',
     ];
 
@@ -69,6 +74,8 @@ class Shipment extends Model
             'accepted_at' => 'datetime',
             'completion_submitted_at' => 'datetime',
             'completion_verified_at' => 'datetime',
+            'pickup_scheduled_at' => 'datetime',
+            'delivery_scheduled_at' => 'datetime',
         ];
     }
 
@@ -140,6 +147,16 @@ class Shipment extends Model
         return $this->belongsTo(Company::class, 'vendor_company_id');
     }
 
+    public function pickupVendor(): BelongsTo
+    {
+        return $this->belongsTo(Vendor::class, 'pickup_vendor_id');
+    }
+
+    public function deliveryVendor(): BelongsTo
+    {
+        return $this->belongsTo(Vendor::class, 'delivery_vendor_id');
+    }
+
     public function vendorInvoice(): HasOne
     {
         return $this->hasOne(VendorInvoice::class, 'shipment_id');
@@ -188,6 +205,26 @@ class Shipment extends Model
     public function createdByUser(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function internalPic(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'internal_pic_id');
+    }
+
+    public function train(): BelongsTo
+    {
+        return $this->belongsTo(Train::class);
+    }
+
+    public function originYard(): BelongsTo
+    {
+        return $this->belongsTo(Location::class, 'origin_yard_id');
+    }
+
+    public function destinationYard(): BelongsTo
+    {
+        return $this->belongsTo(Location::class, 'destination_yard_id');
     }
 
     public function containers(): HasMany
