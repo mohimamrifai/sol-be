@@ -42,6 +42,8 @@ class UserController extends Controller
         $users = $query->orderBy('created_at', 'desc')
             ->paginate($request->per_page ?? 15);
 
+        $users->getCollection()->transform(fn (User $user) => $this->transformUser($user));
+
         return response()->json($users);
     }
 
@@ -66,6 +68,11 @@ class UserController extends Controller
         $featureAccess = $validated['feature_access'] ?? null;
         unset($validated['location_ids'], $validated['feature_access']);
 
+        $roleName = $validated['role'];
+        $resolvedFeatureAccess = $roleName === 'super_admin'
+            ? UserRole::SuperAdmin->defaultFeatureAccess()
+            : ($featureAccess ?? $this->defaultFeatureAccessForRole($roleName));
+
         $user = User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
@@ -74,7 +81,7 @@ class UserController extends Controller
             'user_type' => $validated['user_type'],
             'company_id' => $validated['company_id'] ?? null,
             'status' => $validated['status'] ?? 'active',
-            'feature_access' => $featureAccess ?? $this->defaultFeatureAccessForRole($validated['role']),
+            'feature_access' => $resolvedFeatureAccess,
         ]);
 
         $user->assignRole($validated['role']);
@@ -85,7 +92,7 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'User berhasil dibuat.',
-            'data' => $user->load(['roles', 'locationAccess:id,code,name']),
+            'data' => $this->transformUser($user->load(['roles', 'locationAccess:id,code,name'])),
         ], 201);
     }
 
@@ -93,7 +100,7 @@ class UserController extends Controller
     {
         $user->load(['company', 'roles', 'locationAccess:id,code,name']);
 
-        return response()->json(['data' => $user]);
+        return response()->json(['data' => $this->transformUser($user)]);
     }
 
     public function update(Request $request, User $user): JsonResponse
@@ -112,6 +119,14 @@ class UserController extends Controller
             'feature_access' => 'sometimes|array',
             'feature_access.*' => 'string',
         ]);
+
+        if (isset($validated['role']) && $this->isLastActiveSuperAdmin($user) && $validated['role'] !== 'super_admin') {
+            return response()->json(['message' => 'Role Super Admin terakhir tidak dapat diubah.'], 422);
+        }
+
+        if (isset($validated['status']) && $validated['status'] === 'inactive' && $this->isLastActiveSuperAdmin($user)) {
+            return response()->json(['message' => 'Super Admin terakhir tidak dapat dinonaktifkan.'], 422);
+        }
 
         if (isset($validated['password'])) {
             $validated['password'] = Hash::make($validated['password']);
@@ -132,6 +147,9 @@ class UserController extends Controller
         }
 
         if ($featureAccess !== null) {
+            if ($user->hasRole('super_admin')) {
+                $featureAccess = UserRole::SuperAdmin->defaultFeatureAccess();
+            }
             $user->update(['feature_access' => $featureAccess]);
         }
 
@@ -141,7 +159,7 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'User berhasil diperbarui.',
-            'data' => $user->load(['roles', 'locationAccess:id,code,name']),
+            'data' => $this->transformUser($user->load(['roles', 'locationAccess:id,code,name'])),
         ]);
     }
 
@@ -162,11 +180,15 @@ class UserController extends Controller
             'status' => 'required|in:active,inactive,pending',
         ]);
 
+        if ($validated['status'] === 'inactive' && $this->isLastActiveSuperAdmin($user)) {
+            return response()->json(['message' => 'Super Admin terakhir tidak dapat dinonaktifkan.'], 422);
+        }
+
         $user->update(['status' => $validated['status']]);
 
         return response()->json([
             'message' => 'Status user berhasil diperbarui.',
-            'data' => $user->fresh(['roles', 'locationAccess:id,code,name']),
+            'data' => $this->transformUser($user->fresh(['roles', 'locationAccess:id,code,name'])),
         ]);
     }
 
@@ -179,6 +201,40 @@ class UserController extends Controller
         $user->update(['password' => Hash::make($validated['password'])]);
 
         return response()->json(['message' => 'Password berhasil direset.']);
+    }
+
+    private function transformUser(User $user): array
+    {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'phone' => $user->phone,
+            'status' => $user->status,
+            'user_type' => $user->user_type,
+            'company_id' => $user->company_id,
+            'company' => $user->company,
+            'roles' => $user->roles,
+            'role' => $user->roles->first()?->name,
+            'feature_access' => $user->feature_access,
+            'location_access' => $user->relationLoaded('locationAccess') ? $user->locationAccess : [],
+            'last_login_at' => $user->last_login_at?->toIso8601String(),
+            'created_at' => $user->created_at?->toIso8601String(),
+            'updated_at' => $user->updated_at?->toIso8601String(),
+        ];
+    }
+
+    private function isLastActiveSuperAdmin(User $user): bool
+    {
+        if (! $user->hasRole('super_admin') || ! $user->isActive()) {
+            return false;
+        }
+
+        return User::query()
+            ->role('super_admin')
+            ->where('status', 'active')
+            ->where('user_type', 'internal')
+            ->count() <= 1;
     }
 
     /**

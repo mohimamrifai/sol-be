@@ -60,7 +60,7 @@ class Booking extends Model
         'pickup_date', 'pickup_time', 'pickup_notes', 'delivery_notes',
         'container_responsibility',
         'confirmed_terms_at',
-        'estimated_price', 'status',
+        'estimated_price', 'status', 'draft_expires_at',
         'rejection_reason', 'notes',
         'approved_by', 'approved_at',
     ];
@@ -71,6 +71,7 @@ class Booking extends Model
             'departure_date' => 'date',
             'pickup_date' => 'date',
             'approved_at' => 'datetime',
+            'draft_expires_at' => 'datetime',
             'confirmed_terms_at' => 'datetime',
             'estimated_weight' => 'decimal:2',
             'estimated_cbm' => 'decimal:2',
@@ -197,7 +198,8 @@ class Booking extends Model
      */
     public function isEditable(): bool
     {
-        return $this->status === self::STATUS_DRAFT;
+        return $this->status === self::STATUS_DRAFT
+            && ($this->draft_expires_at === null || $this->draft_expires_at->isFuture());
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Resources\Vendor;
 
+use App\Enums\VendorInvoiceStatus;
 use App\Models\VendorInvoice;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -32,8 +33,8 @@ class VendorInvoiceResource extends JsonResource
             'total_amount' => (float) $this->total_amount,
             'paid_amount' => (float) $this->paidAmount(),
             'outstanding_amount' => (float) $this->outstandingAmount(),
-            'status' => $this->status,
-            'status_label' => $this->status ? $this->status->label() : null,
+            'status' => $this->statusValue(),
+            'status_label' => VendorInvoiceStatus::tryFrom($this->statusValue())?->label() ?? $this->statusValue(),
             'notes' => $this->notes,
             'file_path' => $this->file_path,
             'file_url' => $this->file_path ? url('storage/'.$this->file_path) : null,

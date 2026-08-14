@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\User;
+use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -61,6 +62,12 @@ class CompanyController extends Controller
 
         $validated['type'] = Company::TYPE_CUSTOMER;
         $validated['status'] = $validated['status'] ?? 'pending';
+        if (empty($validated['payment_term'])) {
+            $validated['payment_term'] = SystemConfig::defaultPaymentTerm();
+        }
+        if (! array_key_exists('postpaid_term_days', $validated) || $validated['postpaid_term_days'] === null) {
+            $validated['postpaid_term_days'] = SystemConfig::defaultPostpaidTermDays();
+        }
 
         $company = Company::create($validated);
 

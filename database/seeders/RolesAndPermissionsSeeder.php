@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Enums\UserRole;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
@@ -101,6 +102,42 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_dashboard', 'manage_master_data',
         ]);
 
+        $customerService = Role::firstOrCreate(['name' => 'customer_service', 'guard_name' => 'web']);
+        $customerService->givePermissionTo([
+            'view_companies', 'view_bookings', 'create_bookings', 'edit_bookings',
+            'view_shipments', 'view_invoices', 'view_payments',
+            'view_dashboard', 'view_documents',
+        ]);
+
+        $billing = Role::firstOrCreate(['name' => 'billing', 'guard_name' => 'web']);
+        $billing->givePermissionTo([
+            'view_companies', 'view_bookings', 'view_shipments',
+            'view_invoices', 'create_invoices', 'edit_invoices', 'approve_invoices',
+            'view_payments', 'manage_payments',
+            'view_dashboard', 'view_reports', 'export_reports',
+        ]);
+
+        $accountManager = Role::firstOrCreate(['name' => 'account_manager', 'guard_name' => 'web']);
+        $accountManager->givePermissionTo([
+            'view_companies', 'create_companies', 'edit_companies',
+            'view_bookings', 'view_shipments', 'view_invoices', 'view_payments',
+            'view_dashboard', 'view_reports',
+        ]);
+
+        $management = Role::firstOrCreate(['name' => 'management', 'guard_name' => 'web']);
+        $management->givePermissionTo([
+            'view_companies', 'view_bookings', 'view_shipments',
+            'view_invoices', 'view_payments',
+            'view_dashboard', 'view_analytics', 'view_reports', 'export_reports',
+        ]);
+
+        $internalViewer = Role::firstOrCreate(['name' => 'internal_viewer', 'guard_name' => 'web']);
+        $internalViewer->givePermissionTo([
+            'view_companies', 'view_bookings', 'view_shipments',
+            'view_invoices', 'view_payments',
+            'view_dashboard', 'view_reports',
+        ]);
+
         // ── Roles Customer ──
         $companyAdmin = Role::firstOrCreate(['name' => 'company_admin', 'guard_name' => 'web']);
         $companyAdmin->givePermissionTo([
@@ -198,6 +235,7 @@ class RolesAndPermissionsSeeder extends Seeder
                 'user_type' => 'internal',
             ]
         );
-        $admin->assignRole('super_admin');
+        $admin->syncRoles(['super_admin']);
+        $admin->update(['feature_access' => UserRole::SuperAdmin->defaultFeatureAccess()]);
     }
 }

@@ -257,7 +257,7 @@ class VendorPortalTest extends TestCase
         ])->assertCreated();
 
         $inv = VendorInvoice::findOrFail($res->json('data.id'));
-        $this->assertSame(VendorInvoiceStatus::Draft->value, $inv->status->value);
+        $this->assertSame(VendorInvoiceStatus::Draft->value, $inv->statusValue());
         $this->assertEquals(1000000.0, (float) $inv->total_amount);
         $this->assertSame($job->id, $inv->shipment_id);
     }
@@ -319,7 +319,7 @@ class VendorPortalTest extends TestCase
         $invId = $res->json('data.id');
 
         $this->postJson("/api/vendor/invoices/{$invId}/submit")->assertOk();
-        $this->assertSame(VendorInvoiceStatus::Submitted->value, VendorInvoice::find($invId)->status->value);
+        $this->assertSame(VendorInvoiceStatus::Submitted->value, VendorInvoice::find($invId)?->statusValue());
     }
 
     public function test_company_only_shows_own_company(): void

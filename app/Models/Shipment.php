@@ -37,7 +37,7 @@ class Shipment extends Model
     private const IN_PROGRESS_STATUSES = [
         'cargo_received', 'stuffing_container', 'container_sealed',
         'departed', 'train_departed', 'arrived', 'train_arrived',
-        'unloading', 'container_unloading', 'ready_for_pickup',
+        'unloading', 'container_unloading', 'ready_for_pickup', 'proof_of_delivery',
     ];
 
     protected $fillable = [
@@ -52,7 +52,8 @@ class Shipment extends Model
         'is_dangerous_goods', 'dg_class_id', 'un_number', 'msds_file',
         'equipment_condition', 'temperature',
         'notes', 'cancelled_reason', 'created_by',
-        'internal_pic_id', 'train_id', 'origin_yard_id', 'destination_yard_id', 'planning_notes',
+        'free_storage_origin_days', 'free_storage_destination_days',
+        'internal_pic_id', 'train_id', 'train_schedule_id', 'origin_yard_id', 'destination_yard_id', 'planning_notes',
         'pickup_vendor_id', 'pickup_vehicle_type', 'pickup_vehicle_plate',
         'pickup_driver_name', 'pickup_driver_mobile', 'pickup_vendor_pic', 'pickup_scheduled_at', 'pickup_remark',
         'delivery_vendor_id', 'delivery_vehicle_type', 'delivery_vehicle_plate',
@@ -138,6 +139,11 @@ class Shipment extends Model
         return $this->belongsTo(Booking::class);
     }
 
+    public function proofOfDelivery(): HasOne
+    {
+        return $this->hasOne(ProofOfDelivery::class);
+    }
+
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class, 'company_id');
@@ -166,6 +172,11 @@ class Shipment extends Model
     public function adminVendorJobOrders(): HasMany
     {
         return $this->hasMany(VendorJobOrder::class);
+    }
+
+    public function operationTasks(): HasMany
+    {
+        return $this->hasMany(OperationTask::class);
     }
 
     public function vendorInvoice(): HasOne
@@ -226,6 +237,11 @@ class Shipment extends Model
     public function train(): BelongsTo
     {
         return $this->belongsTo(Train::class);
+    }
+
+    public function trainSchedule(): BelongsTo
+    {
+        return $this->belongsTo(TrainSchedule::class);
     }
 
     public function originYard(): BelongsTo

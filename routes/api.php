@@ -1,9 +1,20 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\AdminContainerController;
+use App\Http\Controllers\Api\Admin\AdminContainerMovementController;
+use App\Http\Controllers\Api\Admin\AdminCustomerPricingController;
+use App\Http\Controllers\Api\Admin\AdminOperationTaskController;
+use App\Http\Controllers\Api\Admin\AdminProofOfDeliveryController;
+use App\Http\Controllers\Api\Admin\AdminReportController;
+use App\Http\Controllers\Api\Admin\AdminRouteController;
+use App\Http\Controllers\Api\Admin\AdminSettingsController;
+use App\Http\Controllers\Api\Admin\AdminStationController;
 use App\Http\Controllers\Api\Admin\AdminVendorInvoiceController;
 use App\Http\Controllers\Api\Admin\AdminVendorJobOrderController;
 use App\Http\Controllers\Api\Admin\AdminVendorPaymentController;
 use App\Http\Controllers\Api\Admin\AdminVendorReportController;
+use App\Http\Controllers\Api\Admin\AdminTrainScheduleController;
+use App\Http\Controllers\Api\Admin\AdminYardController;
 use App\Http\Controllers\Api\Admin\BookingController as AdminBookingController;
 use App\Http\Controllers\Api\Admin\BranchController;
 use App\Http\Controllers\Api\Admin\CompanyController;
@@ -98,7 +109,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ══════════════════════════════════════════
     //  ADMIN INTERNAL
     // ══════════════════════════════════════════
-    Route::prefix('admin')->middleware('admin')->group(function () {
+    Route::prefix('admin')->middleware(['admin', 'feature'])->group(function () {
 
         Route::get('dashboard', [AdminDashboardController::class, 'index']);
 
@@ -132,8 +143,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('users/{user}/reset-password', [UserController::class, 'resetPassword']);
 
         // Role & Permission Management
+        Route::get('roles/stats', [RoleManagementController::class, 'stats']);
         Route::get('roles', [RoleManagementController::class, 'index']);
         Route::post('roles', [RoleManagementController::class, 'storeRole']);
+        Route::get('roles/{role}', [RoleManagementController::class, 'show']);
+        Route::put('roles/{role}', [RoleManagementController::class, 'updateRole']);
+        Route::post('roles/{role}/deactivate', [RoleManagementController::class, 'deactivate']);
         Route::get('permissions', [RoleManagementController::class, 'permissions']);
         Route::put('roles/{role}/permissions', [RoleManagementController::class, 'updateRolePermissions']);
 
@@ -150,12 +165,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('transport-modes/{transportMode}', [MasterDataController::class, 'destroyTransportMode']);
 
         // Master Data – Service Types
+        Route::get('service-types/stats', [MasterDataController::class, 'serviceTypesStats']);
         Route::get('service-types', [MasterDataController::class, 'serviceTypes']);
         Route::post('service-types', [MasterDataController::class, 'storeServiceType']);
         Route::put('service-types/{serviceType}', [MasterDataController::class, 'updateServiceType']);
         Route::delete('service-types/{serviceType}', [MasterDataController::class, 'destroyServiceType']);
 
         // Master Data – Container Types
+        Route::get('container-types/stats', [MasterDataController::class, 'containerTypesStats']);
         Route::get('container-types', [MasterDataController::class, 'containerTypes']);
         Route::post('container-types', [MasterDataController::class, 'storeContainerType']);
         Route::put('container-types/{containerType}', [MasterDataController::class, 'updateContainerType']);
@@ -192,10 +209,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('dg-classes/{dgClass}', [MasterDataController::class, 'destroyDgClass']);
 
         // Master Data – Additional Charges
+        Route::get('additional-charges/stats', [MasterDataController::class, 'additionalChargesStats']);
         Route::get('additional-charges', [MasterDataController::class, 'additionalCharges']);
+        Route::get('additional-charges/{additionalCharge}', [MasterDataController::class, 'showAdditionalCharge']);
         Route::post('additional-charges', [MasterDataController::class, 'storeAdditionalCharge']);
         Route::put('additional-charges/{additionalCharge}', [MasterDataController::class, 'updateAdditionalCharge']);
-        Route::delete('additional-charges/{additionalCharge}', [MasterDataController::class, 'destroyAdditionalCharge']);
+        Route::post('additional-charges/{additionalCharge}/deactivate', [MasterDataController::class, 'deactivateAdditionalCharge']);
 
         // Booking Management
         Route::get('bookings/stats', [AdminBookingController::class, 'stats']);
@@ -313,6 +332,93 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('reports/vendor-invoices/export', [AdminVendorReportController::class, 'invoiceExport']);
         Route::get('reports/vendor-payments', [AdminVendorReportController::class, 'paymentIndex']);
         Route::get('reports/vendor-payments/export', [AdminVendorReportController::class, 'paymentExport']);
+
+        // Container Management (FSD Phase 4)
+        Route::get('containers/stats', [AdminContainerController::class, 'stats']);
+        Route::get('containers', [AdminContainerController::class, 'index']);
+        Route::post('containers', [AdminContainerController::class, 'store']);
+        Route::get('containers/{containerAsset}', [AdminContainerController::class, 'show']);
+        Route::put('containers/{containerAsset}', [AdminContainerController::class, 'update']);
+        Route::get('container-movements', [AdminContainerMovementController::class, 'index']);
+
+        // Operations (FSD Phase 5)
+        Route::get('operation-tasks/{operationType}/stats', [AdminOperationTaskController::class, 'stats']);
+        Route::get('operation-tasks/{operationType}', [AdminOperationTaskController::class, 'index']);
+        Route::get('operation-tasks/task/{operationTask}', [AdminOperationTaskController::class, 'show']);
+        Route::post('operation-tasks/{operationTask}/start', [AdminOperationTaskController::class, 'start']);
+        Route::post('operation-tasks/{operationTask}/complete', [AdminOperationTaskController::class, 'complete']);
+        Route::put('operation-tasks/{operationTask}/remark', [AdminOperationTaskController::class, 'updateRemark']);
+        Route::post('operation-tasks/{operationTask}/documents', [AdminOperationTaskController::class, 'storeDocument']);
+
+        // Proof of Delivery (FSD dedicated workflow)
+        Route::get('proof-of-deliveries/stats', [AdminProofOfDeliveryController::class, 'stats']);
+        Route::get('proof-of-deliveries', [AdminProofOfDeliveryController::class, 'index']);
+        Route::get('proof-of-deliveries/{proofOfDelivery}', [AdminProofOfDeliveryController::class, 'show']);
+        Route::post('proof-of-deliveries/{proofOfDelivery}/submit', [AdminProofOfDeliveryController::class, 'submit']);
+        Route::post('proof-of-deliveries/{proofOfDelivery}/verify', [AdminProofOfDeliveryController::class, 'verify']);
+        Route::post('proof-of-deliveries/{proofOfDelivery}/reject', [AdminProofOfDeliveryController::class, 'reject']);
+
+        // Master Data – Routes, Stations, Yards (FSD Phase 6)
+        Route::get('routes/stats', [AdminRouteController::class, 'stats']);
+        Route::get('routes', [AdminRouteController::class, 'index']);
+        Route::post('routes', [AdminRouteController::class, 'store']);
+        Route::get('routes/{route}', [AdminRouteController::class, 'show']);
+        Route::put('routes/{route}', [AdminRouteController::class, 'update']);
+        Route::post('routes/{route}/deactivate', [AdminRouteController::class, 'deactivate']);
+
+        Route::get('stations/stats', [AdminStationController::class, 'stats']);
+        Route::get('stations', [AdminStationController::class, 'index']);
+        Route::post('stations', [AdminStationController::class, 'store']);
+        Route::get('stations/{station}', [AdminStationController::class, 'show']);
+        Route::put('stations/{station}', [AdminStationController::class, 'update']);
+        Route::post('stations/{station}/deactivate', [AdminStationController::class, 'deactivate']);
+
+        Route::get('yards/stats', [AdminYardController::class, 'stats']);
+        Route::get('yards', [AdminYardController::class, 'index']);
+        Route::post('yards', [AdminYardController::class, 'store']);
+        Route::get('yards/{yard}', [AdminYardController::class, 'show']);
+        Route::put('yards/{yard}', [AdminYardController::class, 'update']);
+        Route::post('yards/{yard}/deactivate', [AdminYardController::class, 'deactivate']);
+
+        Route::get('train-schedules/stats', [AdminTrainScheduleController::class, 'stats']);
+        Route::get('train-schedules', [AdminTrainScheduleController::class, 'index']);
+        Route::post('train-schedules', [AdminTrainScheduleController::class, 'store']);
+        Route::get('train-schedules/{trainSchedule}', [AdminTrainScheduleController::class, 'show']);
+        Route::put('train-schedules/{trainSchedule}', [AdminTrainScheduleController::class, 'update']);
+        Route::post('train-schedules/{trainSchedule}/cancel', [AdminTrainScheduleController::class, 'cancel']);
+
+        Route::get('customer-pricings/stats', [AdminCustomerPricingController::class, 'stats']);
+        Route::get('customer-pricings', [AdminCustomerPricingController::class, 'index']);
+        Route::post('customer-pricings', [AdminCustomerPricingController::class, 'store']);
+        Route::get('customer-pricings/{customerPricing}', [AdminCustomerPricingController::class, 'show']);
+        Route::put('customer-pricings/{customerPricing}', [AdminCustomerPricingController::class, 'update']);
+        Route::post('customer-pricings/{customerPricing}/deactivate', [AdminCustomerPricingController::class, 'deactivate']);
+
+        // Reports (FSD Phase 7)
+        Route::get('reports/shipments', [AdminReportController::class, 'shipmentReport']);
+        Route::get('reports/shipments/export', [AdminReportController::class, 'shipmentReportExport']);
+        Route::get('reports/bookings', [AdminReportController::class, 'bookingReport']);
+        Route::get('reports/bookings/export', [AdminReportController::class, 'bookingReportExport']);
+        Route::get('reports/customer-invoices', [AdminReportController::class, 'customerInvoiceReport']);
+        Route::get('reports/customer-invoices/export', [AdminReportController::class, 'customerInvoiceReportExport']);
+        Route::get('reports/customer-payments', [AdminReportController::class, 'customerPaymentReport']);
+        Route::get('reports/customer-payments/export', [AdminReportController::class, 'customerPaymentReportExport']);
+        Route::get('reports/containers', [AdminReportController::class, 'containerReport']);
+        Route::get('reports/containers/export', [AdminReportController::class, 'containerReportExport']);
+
+        // Settings (FSD Phase 8)
+        Route::get('settings/profile', [AdminSettingsController::class, 'profile']);
+        Route::post('settings/change-password', [AdminSettingsController::class, 'changePassword']);
+        Route::get('settings/numbering-formats', [AdminSettingsController::class, 'numberingFormatsIndex']);
+        Route::post('settings/numbering-formats/preview', [AdminSettingsController::class, 'numberingFormatPreview']);
+        Route::get('settings/numbering-formats/{numberingFormat}', [AdminSettingsController::class, 'numberingFormatShow']);
+        Route::put('settings/numbering-formats/{numberingFormat}', [AdminSettingsController::class, 'numberingFormatUpdate']);
+        Route::middleware('super_admin')->group(function () {
+            Route::get('settings/system', [AdminSettingsController::class, 'systemSettingsIndex']);
+            Route::put('settings/system', [AdminSettingsController::class, 'systemSettingsUpdate']);
+            Route::post('settings/system/test-email', [AdminSettingsController::class, 'testEmailConfiguration']);
+        });
+        Route::get('settings/activity-logs', [AdminSettingsController::class, 'activityLogs']);
     });
 
     // ══════════════════════════════════════════

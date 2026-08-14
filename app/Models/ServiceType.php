@@ -10,7 +10,10 @@ class ServiceType extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['transport_mode_id', 'name', 'code', 'description', 'is_active'];
+    protected $fillable = [
+        'transport_mode_id', 'name', 'code', 'service_category', 'pricing_basis',
+        'description', 'is_active',
+    ];
 
     protected function casts(): array
     {

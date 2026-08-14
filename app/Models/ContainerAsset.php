@@ -17,6 +17,7 @@ class ContainerAsset extends Model
         'status',
         'max_payload_kg',
         'max_capacity_cbm',
+        'manufacture_year',
         'remark',
     ];
 
@@ -40,11 +41,29 @@ class ContainerAsset extends Model
 
     public function currentYard(): BelongsTo
     {
-        return $this->belongsTo(Location::class, 'current_yard_id');
+        return $this->belongsTo(Yard::class, 'current_yard_id');
     }
 
     public function shipmentContainers(): HasMany
     {
         return $this->hasMany(Container::class, 'container_asset_id');
+    }
+
+    public function movements(): HasMany
+    {
+        return $this->hasMany(ContainerMovement::class)->orderByDesc('occurred_at');
+    }
+
+    public function maintenances(): HasMany
+    {
+        return $this->hasMany(ContainerMaintenance::class)->orderByDesc('maintenance_date');
+    }
+
+    public function activeShipmentContainer(): ?Container
+    {
+        return $this->shipmentContainers()
+            ->whereHas('shipment', fn ($q) => $q->whereNotIn('status', ['completed', 'cancelled']))
+            ->latest()
+            ->first();
     }
 }

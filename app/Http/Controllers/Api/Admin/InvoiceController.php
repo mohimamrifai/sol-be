@@ -7,6 +7,7 @@ use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\Shipment;
 use App\Services\InvoiceGenerationService;
+use App\Support\SystemConfig;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -60,9 +61,10 @@ class InvoiceController extends Controller
         $paginated->getCollection()->transform(function (Shipment $shipment) {
             $items = $this->invoiceGeneration->buildLineItemsFromShipment($shipment);
             $subtotal = array_sum(array_map(fn ($i) => $i['quantity'] * $i['unit_price'], $items));
+            $taxBreakdown = SystemConfig::applyTax(max(0, $subtotal));
 
             return array_merge($shipment->toArray(), [
-                'estimated_amount' => round(max(0, $subtotal) * 1.11, 2),
+                'estimated_amount' => $taxBreakdown['total_amount'],
             ]);
         });
 
@@ -77,13 +79,14 @@ class InvoiceController extends Controller
 
         $items = $this->invoiceGeneration->buildLineItemsFromShipment($shipment);
         $subtotal = array_sum(array_map(fn ($i) => $i['quantity'] * $i['unit_price'], $items));
+        $taxBreakdown = SystemConfig::applyTax(max(0, $subtotal));
 
         return response()->json([
             'data' => [
                 'items' => $items,
-                'subtotal' => max(0, $subtotal),
-                'tax_amount' => round(max(0, $subtotal) * 0.11, 2),
-                'total_amount' => round(max(0, $subtotal) * 1.11, 2),
+                'subtotal' => $taxBreakdown['subtotal'],
+                'tax_amount' => $taxBreakdown['tax_amount'],
+                'total_amount' => $taxBreakdown['total_amount'],
             ],
         ]);
     }
@@ -217,6 +220,14 @@ class InvoiceController extends Controller
 
         $status = $data['status'] ?? 'issued';
 
+        $shipment = Shipment::findOrFail($data['shipment_id']);
+        if ($shipment->status !== 'completed') {
+            return response()->json(['message' => 'Hanya shipment completed yang dapat di-invoice.'], 422);
+        }
+        if ($shipment->company_id != $data['company_id']) {
+            return response()->json(['message' => 'Company tidak sesuai dengan shipment.'], 422);
+        }
+
         if ($status !== 'draft') {
             $request->validate([
                 'issued_date' => 'required|date',
@@ -229,8 +240,9 @@ class InvoiceController extends Controller
             $subtotal += $item['quantity'] * $item['unit_price'];
         }
 
-        $taxAmount = $subtotal * 0.11; // PPN 11%
-        $totalAmount = $subtotal + $taxAmount;
+        $taxBreakdown = SystemConfig::applyTax($subtotal);
+        $taxAmount = $taxBreakdown['tax_amount'];
+        $totalAmount = $taxBreakdown['total_amount'];
 
         $invoice = Invoice::create([
             'shipment_id' => $data['shipment_id'],

@@ -11,6 +11,7 @@ use App\Models\Shipment;
 use App\Models\ShipmentItem;
 use App\Services\ShipmentViewService;
 use App\Services\VendorJobOrderService;
+use App\Support\SystemConfig;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -53,6 +54,9 @@ class ShipmentController extends Controller
 
         if ($request->filled('status')) {
             $this->applyFsdStatusFilter($query, (string) $request->status);
+        }
+        if ($request->query('active') === '1') {
+            $query->whereNotIn('status', ['completed', 'cancelled']);
         }
         if ($request->filled('company_id')) {
             $query->where('company_id', $request->company_id);
@@ -353,8 +357,9 @@ class ShipmentController extends Controller
             }
 
             $subtotal = $baseFreight + $additionalTotal + $shipmentChargesTotal;
-            $taxAmount = $subtotal * 0.11;
-            $totalAmount = $subtotal + $taxAmount;
+            $taxBreakdown = SystemConfig::applyTax($subtotal);
+            $taxAmount = $taxBreakdown['tax_amount'];
+            $totalAmount = $taxBreakdown['total_amount'];
 
             $invoice = Invoice::create([
                 'shipment_id' => $shipment->id,
@@ -402,7 +407,7 @@ class ShipmentController extends Controller
 
             if ($taxAmount > 0) {
                 $invoice->items()->create([
-                    'description' => 'PPN (11%)',
+                    'description' => SystemConfig::taxLabel(),
                     'quantity' => 1,
                     'unit_price' => $taxAmount,
                     'total_price' => $taxAmount,
@@ -480,7 +485,7 @@ class ShipmentController extends Controller
             $remainingCbm = $maxCbm > 0 ? max(0, $maxCbm - $usedCbm) : null;
             $remainingPayload = $maxPayload > 0 ? max(0, $maxPayload - $usedPayload) : null;
 
-            $canAssign = ! $isLcl || (
+            $canAssign = ! $isLcl || SystemConfig::allowOverCapacity() || (
                 ($remainingCbm === null || $remainingCbm >= $shipmentCbm)
                 && ($remainingPayload === null || $remainingPayload >= $shipmentWeight)
             );

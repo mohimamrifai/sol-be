@@ -13,6 +13,7 @@ class CargoCategory extends Model
         'name',
         'code',
         'description',
+        'pricing_multiplier',
         'is_active',
         'requires_temperature',
         'is_project_cargo',
@@ -24,6 +25,7 @@ class CargoCategory extends Model
     {
         return [
             'is_active' => 'boolean',
+            'pricing_multiplier' => 'decimal:4',
             'requires_temperature' => 'boolean',
             'is_project_cargo' => 'boolean',
             'is_liquid' => 'boolean',

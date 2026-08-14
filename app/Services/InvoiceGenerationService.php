@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\Shipment;
 use App\Models\User;
+use App\Support\SystemConfig;
 use Illuminate\Support\Facades\DB;
 
 final class InvoiceGenerationService
@@ -109,8 +110,9 @@ final class InvoiceGenerationService
                 $subtotal += $item['quantity'] * $item['unit_price'];
             }
             $subtotal = max(0, $subtotal);
-            $taxAmount = round($subtotal * 0.11, 2);
-            $totalAmount = $subtotal + $taxAmount;
+            $taxBreakdown = SystemConfig::applyTax($subtotal);
+            $taxAmount = $taxBreakdown['tax_amount'];
+            $totalAmount = $taxBreakdown['total_amount'];
 
             $shipment->loadMissing([
                 'company:id,name,npwp,address,postpaid_term_days',

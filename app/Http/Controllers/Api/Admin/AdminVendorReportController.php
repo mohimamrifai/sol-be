@@ -13,6 +13,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminVendorReportController extends Controller
 {
+    use AdminReportExportHelpers;
     public function invoiceIndex(Request $request): JsonResponse
     {
         $query = $this->invoiceReportQuery($request);
@@ -32,20 +33,25 @@ class AdminVendorReportController extends Controller
         return response()->json($paginated);
     }
 
-    public function invoiceExport(Request $request): StreamedResponse
+    public function invoiceExport(Request $request)
     {
         $rows = $this->invoiceReportQuery($request)->orderByDesc('invoice_date')->get();
+        $headers = ['Vendor', 'Vendor Invoice No', 'Job Order', 'Invoice Date', 'Amount', 'Status'];
 
-        return $this->csvResponse('vendor-invoice-report.csv', [
-            'Vendor', 'Vendor Invoice No', 'Job Order', 'Invoice Date', 'Amount', 'Status',
-        ], $rows->map(fn (VendorInvoice $inv) => [
-            $inv->vendor?->name,
-            $inv->vendor_external_number ?? $inv->invoice_number,
-            $inv->jobOrders->pluck('job_order_number')->join(', '),
-            $inv->invoice_date?->toDateString(),
-            $inv->total_amount,
-            $inv->getRawOriginal('status') ?? $inv->status,
-        ]));
+        return $this->exportByFormat(
+            $request,
+            'vendor-invoice-report.csv',
+            $headers,
+            $rows->map(fn (VendorInvoice $inv) => [
+                $inv->vendor?->name,
+                $inv->vendor_external_number ?? $inv->invoice_number,
+                $inv->jobOrders->pluck('job_order_number')->join(', '),
+                $inv->invoice_date?->toDateString(),
+                $inv->total_amount,
+                $inv->getRawOriginal('status') ?? $inv->status,
+            ]),
+            'Vendor Invoice Report'
+        );
     }
 
     public function paymentIndex(Request $request): JsonResponse
@@ -71,24 +77,29 @@ class AdminVendorReportController extends Controller
         return response()->json($paginated);
     }
 
-    public function paymentExport(Request $request): StreamedResponse
+    public function paymentExport(Request $request)
     {
         $rows = $this->paymentReportQuery($request)->orderByDesc('created_at')->get();
+        $headers = ['Vendor', 'Payment No', 'Payment Date', 'Amount', 'Method', 'Status'];
 
-        return $this->csvResponse('vendor-payment-report.csv', [
-            'Vendor', 'Payment No', 'Payment Date', 'Amount', 'Method', 'Status',
-        ], $rows->map(function (VendorPaymentRequest $req) {
-            $lastPayment = $req->payments()->orderByDesc('payment_date')->first();
+        return $this->exportByFormat(
+            $request,
+            'vendor-payment-report.csv',
+            $headers,
+            $rows->map(function (VendorPaymentRequest $req) {
+                $lastPayment = $req->payments()->orderByDesc('payment_date')->first();
 
-            return [
-                $req->vendorInvoice?->vendor?->name,
-                $req->payment_number,
-                $lastPayment?->payment_date?->toDateString(),
-                $req->paid_amount,
-                $lastPayment?->payment_method,
-                $req->status?->value ?? $req->status,
-            ];
-        }));
+                return [
+                    $req->vendorInvoice?->vendor?->name,
+                    $req->payment_number,
+                    $lastPayment?->payment_date?->toDateString(),
+                    $req->paid_amount,
+                    $lastPayment?->payment_method,
+                    $req->status?->value ?? $req->status,
+                ];
+            }),
+            'Vendor Payment Report'
+        );
     }
 
     private function invoiceReportQuery(Request $request)
@@ -128,17 +139,5 @@ class AdminVendorReportController extends Controller
         }
 
         return $query;
-    }
-
-    private function csvResponse(string $filename, array $headers, $rows): StreamedResponse
-    {
-        return response()->streamDownload(function () use ($headers, $rows) {
-            $out = fopen('php://output', 'w');
-            fputcsv($out, $headers);
-            foreach ($rows as $row) {
-                fputcsv($out, is_array($row) ? $row : $row->toArray());
-            }
-            fclose($out);
-        }, $filename, ['Content-Type' => 'text/csv']);
     }
 }

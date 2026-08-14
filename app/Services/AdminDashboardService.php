@@ -9,29 +9,33 @@ use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
+use App\Models\ProofOfDelivery;
 use App\Models\Shipment;
 use App\Models\ShipmentTracking;
 use App\Models\VendorInvoice;
 use App\Models\VendorPayment;
+use App\Models\User;
 use Carbon\Carbon;
 
 class AdminDashboardService
 {
-    public function build(array $input): array
+    public function build(array $input, ?User $user = null): array
     {
+        $access = $user?->featureAccessList() ?? [];
+        $can = fn (string $perm): bool => $user === null || $user->hasFeatureAccess($perm);
         $businessDate = Carbon::parse($input['business_date'] ?? now()->toDateString())->startOfDay();
         [$rangeStart, $rangeEnd] = $this->resolveDateRange($input, $businessDate);
         $monthStart = $businessDate->copy()->startOfMonth();
         $monthEnd = $businessDate->copy()->endOfMonth();
 
-        $summary = $this->buildSummary($businessDate, $monthStart, $monthEnd);
-        $bookingStatusBreakdown = $this->bookingStatusBreakdown($rangeStart, $rangeEnd);
-        $shipmentStatusBreakdown = $this->shipmentStatusBreakdown();
-        $todayOperations = $this->todayOperations($businessDate);
-        $financeSummary = $this->financeSummary($rangeStart, $rangeEnd);
-        $containerSummary = $this->containerSummary();
-        $recentActivity = $this->recentActivity();
-        $notifications = $this->notifications($businessDate);
+        $summary = $can('view_dashboard') ? $this->buildSummary($businessDate, $monthStart, $monthEnd) : [];
+        $bookingStatusBreakdown = $can('view_bookings') ? $this->bookingStatusBreakdown($rangeStart, $rangeEnd) : [];
+        $shipmentStatusBreakdown = $can('view_shipments') ? $this->shipmentStatusBreakdown() : [];
+        $todayOperations = $can('view_operations') ? $this->todayOperations($businessDate) : [];
+        $financeSummary = ($can('view_invoices') || $can('view_payments')) ? $this->financeSummary($rangeStart, $rangeEnd) : [];
+        $containerSummary = $can('view_containers') ? $this->containerSummary() : [];
+        $recentActivity = $can('view_dashboard') ? $this->recentActivity($access) : [];
+        $notifications = $can('view_dashboard') ? $this->notifications($businessDate) : [];
 
         return [
             'filters' => [
@@ -119,13 +123,11 @@ class AdminDashboardService
             ->groupBy('status')
             ->pluck('total', 'status');
 
-        $submitted = (int) ($counts['submitted'] ?? 0);
-
         return [
             'draft' => (int) ($counts['draft'] ?? 0),
-            'submitted' => 0,
-            'under_review' => $submitted,
-            'approved' => (int) ($counts['approved'] ?? 0),
+            'submitted' => (int) ($counts['submitted'] ?? 0),
+            'under_review' => (int) ($counts['under_review'] ?? 0),
+            'confirmed' => (int) ($counts['approved'] ?? 0),
             'rejected' => (int) ($counts['rejected'] ?? 0),
         ];
     }
@@ -137,22 +139,13 @@ class AdminDashboardService
 
         $shipments = Shipment::query()
             ->whereNotIn('status', ['cancelled'])
-            ->get(['id', 'status', 'completion_submitted_at']);
+            ->get(['id', 'status']);
 
         foreach ($shipments as $shipment) {
             $status = strtolower((string) $shipment->status);
 
-            if ($shipment->completion_submitted_at && $status !== 'completed') {
-                $breakdown['proof_of_delivery'] = ($breakdown['proof_of_delivery'] ?? 0) + 1;
-
-                continue;
-            }
-
             $matched = false;
             foreach ($mapping as $fsdKey => $rawStatuses) {
-                if ($fsdKey === 'proof_of_delivery') {
-                    continue;
-                }
                 if (in_array($status, $rawStatuses, true)) {
                     $breakdown[$fsdKey] = ($breakdown[$fsdKey] ?? 0) + 1;
                     $matched = true;
@@ -187,9 +180,7 @@ class AdminDashboardService
             'deliveryToday' => Shipment::whereDate('updated_at', $today)
                 ->where('status', 'ready_for_pickup')
                 ->count(),
-            'podWaitingUpload' => Shipment::whereNotNull('completion_submitted_at')
-                ->where('status', '!=', 'completed')
-                ->count(),
+            'podWaitingUpload' => ProofOfDelivery::where('status', 'waiting_pod')->count(),
         ];
     }
 
@@ -244,65 +235,75 @@ class AdminDashboardService
         ];
     }
 
-    private function recentActivity(): array
+    private function recentActivity(array $access = []): array
     {
         $items = collect();
+        $showAll = $access === [];
+        $canBookings = $showAll || in_array('view_bookings', $access, true);
+        $canFinance = $showAll || in_array('view_invoices', $access, true) || in_array('view_payments', $access, true);
+        $canShipments = $showAll || in_array('view_shipments', $access, true);
 
-        BookingActivity::with('actor:id,name')
-            ->orderByDesc('occurred_at')
-            ->limit(8)
-            ->get()
-            ->each(function (BookingActivity $activity) use ($items) {
-                $items->push([
-                    'time' => $activity->occurred_at?->format('H:i') ?? '',
-                    'module' => 'Booking',
-                    'activity' => $activity->title ?? $activity->description ?? 'Booking updated',
-                    'user' => $activity->actor?->name ?? $activity->actor_role ?? 'System',
-                    'occurredAt' => $activity->occurred_at?->toIso8601String(),
-                ]);
-            });
+        if ($canBookings) {
+            BookingActivity::with('actor:id,name')
+                ->orderByDesc('occurred_at')
+                ->limit(8)
+                ->get()
+                ->each(function (BookingActivity $activity) use ($items) {
+                    $items->push([
+                        'time' => $activity->occurred_at?->format('H:i') ?? '',
+                        'module' => 'Booking',
+                        'activity' => $activity->title ?? $activity->description ?? 'Booking updated',
+                        'user' => $activity->actor?->name ?? $activity->actor_role ?? 'System',
+                        'occurredAt' => $activity->occurred_at?->toIso8601String(),
+                    ]);
+                });
+        }
 
-        InvoiceActivity::with('actorUser:id,name')
-            ->orderByDesc('occurred_at')
-            ->limit(8)
-            ->get()
-            ->each(function (InvoiceActivity $activity) use ($items) {
-                $items->push([
-                    'time' => $activity->occurred_at?->format('H:i') ?? '',
-                    'module' => 'Finance',
-                    'activity' => $activity->description ?? 'Invoice updated',
-                    'user' => $activity->actorUser?->name ?? 'System',
-                    'occurredAt' => $activity->occurred_at?->toIso8601String(),
-                ]);
-            });
+        if ($canFinance) {
+            InvoiceActivity::with('actorUser:id,name')
+                ->orderByDesc('occurred_at')
+                ->limit(8)
+                ->get()
+                ->each(function (InvoiceActivity $activity) use ($items) {
+                    $items->push([
+                        'time' => $activity->occurred_at?->format('H:i') ?? '',
+                        'module' => 'Finance',
+                        'activity' => $activity->description ?? 'Invoice updated',
+                        'user' => $activity->actorUser?->name ?? 'System',
+                        'occurredAt' => $activity->occurred_at?->toIso8601String(),
+                    ]);
+                });
 
-        PaymentActivity::with('actor:id,name')
-            ->orderByDesc('occurred_at')
-            ->limit(8)
-            ->get()
-            ->each(function (PaymentActivity $activity) use ($items) {
-                $items->push([
-                    'time' => $activity->occurred_at?->format('H:i') ?? '',
-                    'module' => 'Finance',
-                    'activity' => $activity->description ?? 'Payment updated',
-                    'user' => $activity->actor?->name ?? 'System',
-                    'occurredAt' => $activity->occurred_at?->toIso8601String(),
-                ]);
-            });
+            PaymentActivity::with('actor:id,name')
+                ->orderByDesc('occurred_at')
+                ->limit(8)
+                ->get()
+                ->each(function (PaymentActivity $activity) use ($items) {
+                    $items->push([
+                        'time' => $activity->occurred_at?->format('H:i') ?? '',
+                        'module' => 'Finance',
+                        'activity' => $activity->description ?? 'Payment updated',
+                        'user' => $activity->actor?->name ?? 'System',
+                        'occurredAt' => $activity->occurred_at?->toIso8601String(),
+                    ]);
+                });
+        }
 
-        ShipmentTracking::with('updatedByUser:id,name')
-            ->orderByDesc('tracked_at')
-            ->limit(8)
-            ->get()
-            ->each(function (ShipmentTracking $tracking) use ($items) {
-                $items->push([
-                    'time' => $tracking->tracked_at?->format('H:i') ?? '',
-                    'module' => 'Shipment',
-                    'activity' => $tracking->notes ?? ('Status: '.$tracking->status),
-                    'user' => $tracking->updatedByUser?->name ?? 'Operations',
-                    'occurredAt' => $tracking->tracked_at?->toIso8601String(),
-                ]);
-            });
+        if ($canShipments) {
+            ShipmentTracking::with('updatedByUser:id,name')
+                ->orderByDesc('tracked_at')
+                ->limit(8)
+                ->get()
+                ->each(function (ShipmentTracking $tracking) use ($items) {
+                    $items->push([
+                        'time' => $tracking->tracked_at?->format('H:i') ?? '',
+                        'module' => 'Shipment',
+                        'activity' => $tracking->notes ?? ('Status: '.$tracking->status),
+                        'user' => $tracking->updatedByUser?->name ?? 'Operations',
+                        'occurredAt' => $tracking->tracked_at?->toIso8601String(),
+                    ]);
+                });
+        }
 
         return $items
             ->sortByDesc('occurredAt')
@@ -322,12 +323,12 @@ class AdminDashboardService
         $today = $businessDate->toDateString();
         $notifications = [];
 
-        $pendingBookings = Booking::where('status', 'submitted')->count();
+        $pendingBookings = Booking::whereIn('status', ['submitted', 'under_review'])->count();
         if ($pendingBookings > 0) {
             $notifications[] = [
                 'key' => 'pendingBookings',
                 'count' => $pendingBookings,
-                'link' => '/dashboard/admin/customer/bookings?status=submitted',
+                'link' => '/dashboard/admin/customer/bookings?status=under_review',
             ];
         }
 

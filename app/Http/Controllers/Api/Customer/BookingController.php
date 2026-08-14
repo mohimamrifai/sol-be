@@ -10,8 +10,10 @@ use App\Models\CargoCategory;
 use App\Models\Invoice;
 use App\Models\ServiceType;
 use App\Models\Shipment;
+use App\Services\BookingDraftExpiryService;
 use App\Services\BookingPriceEstimateService;
 use App\Services\MidtransService;
+use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -452,6 +454,7 @@ class BookingController extends Controller
                 'estimated_price' => $estimate['estimated_price'] ?? null,
                 'msds_file' => $msdsPath,
                 'additional_services' => null, // we use the relationship below
+                'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);
             $booking->recalculateCargoMetrics();
             $booking->save();
@@ -710,6 +713,7 @@ class BookingController extends Controller
             $booking->fill($updatePayload);
             $booking->recalculateCargoMetrics();
             $booking->save();
+            BookingDraftExpiryService::touchDraftExpiry($booking);
 
             $syncData = [];
             foreach ($data['additional_services'] ?? [] as $svc) {
@@ -759,7 +763,11 @@ class BookingController extends Controller
             ], 422);
         }
 
-        $booking->update(['status' => Booking::STATUS_SUBMITTED]);
+        if (BookingDraftExpiryService::isExpired($booking)) {
+            return response()->json(['message' => 'Booking draft sudah expired.'], 422);
+        }
+
+        $booking->update(['status' => Booking::STATUS_SUBMITTED, 'draft_expires_at' => null]);
         $booking->recordActivity(
             'submitted',
             'Booking disubmit',
@@ -846,6 +854,7 @@ class BookingController extends Controller
             $new->status = Booking::STATUS_DRAFT;
             $new->estimated_price = null;
             $new->user_id = $user->id;
+            $new->draft_expires_at = SystemConfig::draftExpiresAt();
             $new->save();
 
             // Copy many-to-many additional services
@@ -1042,8 +1051,9 @@ class BookingController extends Controller
 
         $issuedDate = now()->toDateString();
         $subtotal = (float) ($estimate['estimated_price'] ?? 0);
-        $taxAmount = $subtotal * 0.11;
-        $totalAmount = $subtotal + $taxAmount;
+        $taxBreakdown = SystemConfig::applyTax($subtotal);
+        $taxAmount = $taxBreakdown['tax_amount'];
+        $totalAmount = $taxBreakdown['total_amount'];
 
         $invoice = Invoice::create([
             'shipment_id' => $shipment->id,
@@ -1091,7 +1101,7 @@ class BookingController extends Controller
         }
         if ($taxAmount > 0) {
             $invoice->items()->create([
-                'description' => 'PPN (11%)',
+                'description' => SystemConfig::taxLabel(),
                 'quantity' => 1,
                 'unit_price' => $taxAmount,
                 'total_price' => $taxAmount,

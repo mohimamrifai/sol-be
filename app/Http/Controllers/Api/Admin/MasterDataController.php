@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdditionalCharge;
+use App\Models\AdminActivityLog;
 use App\Models\AdditionalService;
 use App\Models\CargoCategory;
 use App\Models\ContainerType;
@@ -13,11 +14,14 @@ use App\Models\ServiceType;
 use App\Models\Train;
 use App\Models\TrainCar;
 use App\Models\TransportMode;
+use App\Services\AdminActivityLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class MasterDataController extends Controller
 {
+    public function __construct(private AdminActivityLogger $activityLogger) {}
+
     // ── LOCATIONS ──
     public function locations(Request $request): JsonResponse
     {
@@ -142,6 +146,19 @@ class MasterDataController extends Controller
     }
 
     // ── SERVICE TYPES ──
+    public function serviceTypesStats(): JsonResponse
+    {
+        $base = ServiceType::query();
+
+        return response()->json([
+            'data' => [
+                'total' => (clone $base)->count(),
+                'active' => (clone $base)->where('is_active', true)->count(),
+                'inactive' => (clone $base)->where('is_active', false)->count(),
+            ],
+        ]);
+    }
+
     public function serviceTypes(Request $request): JsonResponse
     {
         $query = ServiceType::with('transportMode');
@@ -172,7 +189,10 @@ class MasterDataController extends Controller
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:10',
+            'service_category' => 'nullable|in:rail_freight,pickup_trucking,delivery_trucking,container_rental,lift_on,lift_off,storage,other',
+            'pricing_basis' => 'nullable|in:per_trip,per_container,per_ton,per_kg,per_cbm',
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ], [], [
             'transport_mode_id' => 'moda transport',
@@ -187,7 +207,10 @@ class MasterDataController extends Controller
             'transport_mode_id' => 'sometimes|exists:transport_modes,id',
             'name' => 'sometimes|string|max:255',
             'code' => 'nullable|string|max:10',
+            'service_category' => 'nullable|in:rail_freight,pickup_trucking,delivery_trucking,container_rental,lift_on,lift_off,storage,other',
+            'pricing_basis' => 'nullable|in:per_trip,per_container,per_ton,per_kg,per_cbm',
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ], [], [
             'transport_mode_id' => 'moda transport',
@@ -205,6 +228,19 @@ class MasterDataController extends Controller
     }
 
     // ── CONTAINER TYPES ──
+    public function containerTypesStats(): JsonResponse
+    {
+        $base = ContainerType::query();
+
+        return response()->json([
+            'data' => [
+                'total' => (clone $base)->count(),
+                'active' => (clone $base)->where('is_active', true)->count(),
+                'inactive' => (clone $base)->where('is_active', false)->count(),
+            ],
+        ]);
+    }
+
     public function containerTypes(Request $request): JsonResponse
     {
         $query = ContainerType::query();
@@ -212,8 +248,12 @@ class MasterDataController extends Controller
             $s = $request->search;
             $query->where(function ($q) use ($s) {
                 $q->where('name', 'like', "%{$s}%")
-                    ->orWhere('size', 'like', "%{$s}%");
+                    ->orWhere('size', 'like', "%{$s}%")
+                    ->orWhere('code', 'like', "%{$s}%");
             });
+        }
+        if ($request->filled('category')) {
+            $query->where('category', $request->category);
         }
         if ($request->filled('status')) {
             if ($request->status === 'active') {
@@ -231,12 +271,15 @@ class MasterDataController extends Controller
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'size' => 'required|string|max:10',
+            'category' => 'required|in:dry,high_cube,reefer,open_top,flat_rack,tank,other',
+            'iso_code' => 'nullable|string|max:20',
             'capacity_weight' => 'nullable|numeric',
             'capacity_cbm' => 'nullable|numeric',
             'length' => 'nullable|numeric',
             'width' => 'nullable|numeric',
             'height' => 'nullable|numeric',
             'is_active' => 'boolean',
+            'remark' => 'nullable|string|max:5000',
         ]);
 
         return response()->json(['data' => ContainerType::create($data)], 201);
@@ -247,12 +290,15 @@ class MasterDataController extends Controller
         $data = $request->validate([
             'name' => 'sometimes|string|max:255',
             'size' => 'sometimes|string|max:10',
+            'category' => 'sometimes|in:dry,high_cube,reefer,open_top,flat_rack,tank,other',
+            'iso_code' => 'nullable|string|max:20',
             'capacity_weight' => 'nullable|numeric',
             'capacity_cbm' => 'nullable|numeric',
             'length' => 'nullable|numeric',
             'width' => 'nullable|numeric',
             'height' => 'nullable|numeric',
             'is_active' => 'boolean',
+            'remark' => 'nullable|string|max:5000',
         ]);
         $containerType->update($data);
 
@@ -489,6 +535,7 @@ class MasterDataController extends Controller
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:20|unique:cargo_categories,code',
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
             'requires_temperature' => 'boolean',
             'is_project_cargo' => 'boolean',
@@ -508,6 +555,7 @@ class MasterDataController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'code' => "nullable|string|max:20|unique:cargo_categories,code,{$cargoCategory->id}",
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
             'requires_temperature' => 'boolean',
             'is_project_cargo' => 'boolean',
@@ -547,6 +595,7 @@ class MasterDataController extends Controller
             'name' => 'required|string|max:255',
             'code' => 'required|string|max:20|unique:dg_classes,code',
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ]);
 
@@ -559,6 +608,7 @@ class MasterDataController extends Controller
             'name' => 'sometimes|string|max:255',
             'code' => "sometimes|string|max:20|unique:dg_classes,code,{$dgClass->id}",
             'description' => 'nullable|string',
+            'pricing_multiplier' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ]);
         $dgClass->update($data);
@@ -574,46 +624,183 @@ class MasterDataController extends Controller
     }
 
     // ── ADDITIONAL CHARGES ──
+    public function additionalChargesStats(): JsonResponse
+    {
+        $base = AdditionalCharge::query();
+
+        return response()->json([
+            'data' => [
+                'total' => (clone $base)->count(),
+                'active' => (clone $base)->where('is_active', true)->count(),
+                'inactive' => (clone $base)->where('is_active', false)->count(),
+            ],
+        ]);
+    }
+
     public function additionalCharges(Request $request): JsonResponse
     {
         $query = AdditionalCharge::query();
         if ($request->filled('search')) {
             $s = $request->search;
-            $query->where('name', 'like', "%{$s}%")->orWhere('code', 'like', "%{$s}%");
+            $query->where(function ($q) use ($s) {
+                $q->where('name', 'like', "%{$s}%")->orWhere('code', 'like', "%{$s}%");
+            });
+        }
+        if ($request->filled('charge_category')) {
+            $query->where('charge_category', $request->charge_category);
+        }
+        if ($request->filled('status')) {
+            if ($request->status === 'active') {
+                $query->where('is_active', true);
+            } elseif ($request->status === 'inactive') {
+                $query->where('is_active', false);
+            }
         }
 
-        return response()->json($query->orderBy('name')->paginate($request->per_page ?? 15));
+        $paginated = $query->orderBy('name')->paginate($request->per_page ?? 15);
+        $paginated->getCollection()->transform(fn (AdditionalCharge $charge) => $this->transformAdditionalCharge($charge));
+
+        return response()->json($paginated);
+    }
+
+    public function showAdditionalCharge(AdditionalCharge $additionalCharge): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                ...$this->transformAdditionalCharge($additionalCharge),
+                'activity_log' => AdminActivityLog::query()
+                    ->with('actor:id,name')
+                    ->where('module', 'additional_charge')
+                    ->where('subject_type', $additionalCharge->getMorphClass())
+                    ->where('subject_id', $additionalCharge->id)
+                    ->orderByDesc('occurred_at')
+                    ->limit(20)
+                    ->get()
+                    ->map(fn (AdminActivityLog $log) => [
+                        'description' => $log->description,
+                        'user' => $log->actor?->name,
+                        'occurred_at' => $log->occurred_at?->toIso8601String(),
+                    ]),
+            ],
+        ]);
     }
 
     public function storeAdditionalCharge(Request $request): JsonResponse
     {
         $data = $request->validate([
             'name' => 'required|string|max:255',
-            'code' => 'required|string|max:30|unique:additional_charges,code',
+            'charge_category' => 'required|in:handling,storage,documentation,container,trucking,rail,other',
+            'pricing_basis' => 'required|in:per_shipment,per_container,per_trip,per_ton,per_kg,per_cbm,per_day,per_hour,per_seal,per_document',
             'description' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
 
-        return response()->json(['data' => AdditionalCharge::create($data)], 201);
+        $charge = AdditionalCharge::create($data);
+
+        $this->activityLogger->log(
+            'additional_charge',
+            'Additional Charge dibuat.',
+            $charge,
+            'created',
+            null,
+            $request->user()?->id
+        );
+
+        return response()->json(['data' => $this->transformAdditionalCharge($charge)], 201);
     }
 
     public function updateAdditionalCharge(Request $request, AdditionalCharge $additionalCharge): JsonResponse
     {
         $data = $request->validate([
             'name' => 'sometimes|string|max:255',
-            'code' => "sometimes|string|max:30|unique:additional_charges,code,{$additionalCharge->id}",
+            'charge_category' => 'sometimes|in:handling,storage,documentation,container,trucking,rail,other',
+            'pricing_basis' => 'sometimes|in:per_shipment,per_container,per_trip,per_ton,per_kg,per_cbm,per_day,per_hour,per_seal,per_document',
             'description' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
+
+        $changes = [];
+        foreach (['name', 'charge_category', 'pricing_basis', 'description', 'is_active'] as $field) {
+            if (array_key_exists($field, $data) && (string) ($additionalCharge->{$field}?->value ?? $additionalCharge->{$field}) !== (string) ($data[$field]?->value ?? $data[$field])) {
+                $changes[] = $field;
+            }
+        }
+
         $additionalCharge->update($data);
 
-        return response()->json(['data' => $additionalCharge]);
+        if (in_array('pricing_basis', $changes, true)) {
+            $this->activityLogger->log(
+                'additional_charge',
+                'Pricing Basis diperbarui.',
+                $additionalCharge,
+                'updated',
+                null,
+                $request->user()?->id
+            );
+        }
+
+        if (in_array('is_active', $changes, true) && ! ($data['is_active'] ?? $additionalCharge->is_active)) {
+            $this->activityLogger->log(
+                'additional_charge',
+                'Status diubah menjadi Inactive.',
+                $additionalCharge,
+                'deactivated',
+                null,
+                $request->user()?->id
+            );
+        } elseif ($changes !== []) {
+            $this->activityLogger->log(
+                'additional_charge',
+                'Additional Charge diperbarui.',
+                $additionalCharge,
+                'updated',
+                null,
+                $request->user()?->id
+            );
+        }
+
+        return response()->json(['data' => $this->transformAdditionalCharge($additionalCharge)]);
+    }
+
+    public function deactivateAdditionalCharge(Request $request, AdditionalCharge $additionalCharge): JsonResponse
+    {
+        $additionalCharge->update(['is_active' => false]);
+
+        $this->activityLogger->log(
+            'additional_charge',
+            'Status diubah menjadi Inactive.',
+            $additionalCharge,
+            'deactivated',
+            null,
+            $request->user()?->id
+        );
+
+        return response()->json([
+            'message' => 'Additional Charge dinonaktifkan.',
+            'data' => $this->transformAdditionalCharge($additionalCharge),
+        ]);
     }
 
     public function destroyAdditionalCharge(AdditionalCharge $additionalCharge): JsonResponse
     {
-        $additionalCharge->delete();
+        return response()->json([
+            'message' => 'Additional Charge tidak dapat dihapus. Gunakan Inactive.',
+        ], 422);
+    }
 
-        return response()->json(['message' => 'Additional Charge berhasil dihapus.']);
+    /** @return array<string, mixed> */
+    private function transformAdditionalCharge(AdditionalCharge $charge): array
+    {
+        return [
+            'id' => $charge->id,
+            'name' => $charge->name,
+            'code' => $charge->code,
+            'charge_category' => $charge->charge_category?->value,
+            'charge_category_label' => $charge->charge_category?->label(),
+            'pricing_basis' => $charge->pricing_basis?->value,
+            'pricing_basis_label' => $charge->pricing_basis?->label(),
+            'description' => $charge->description,
+            'is_active' => $charge->is_active,
+        ];
     }
 }

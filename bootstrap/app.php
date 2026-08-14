@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\EnsureFeatureAccess;
+use App\Http\Middleware\EnsureSuperAdmin;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Http\Middleware\EnsureUserIsCustomer;
 use App\Http\Middleware\EnsureUserIsVendor;
@@ -20,6 +22,8 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
             'admin' => EnsureUserIsAdmin::class,
+            'feature' => EnsureFeatureAccess::class,
+            'super_admin' => EnsureSuperAdmin::class,
             'customer' => EnsureUserIsCustomer::class,
             'vendor' => EnsureUserIsVendor::class,
         ]);

@@ -7,9 +7,11 @@ use App\Models\Booking;
 use App\Models\BookingAttachment;
 use App\Models\Shipment;
 use App\Models\User;
+use App\Services\BookingDraftExpiryService;
 use App\Services\BookingPersistenceService;
 use App\Services\BookingPriceEstimateService;
 use App\Services\ShipmentConversionService;
+use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -37,7 +39,11 @@ class BookingController extends Controller
             if ($request->status === 'converted') {
                 $query->whereHas('shipment');
             } else {
-                $query->where('status', $request->status)->whereDoesntHave('shipment');
+                $status = match ($request->status) {
+                    'confirmed' => 'approved',
+                    default => $request->status,
+                };
+                $query->where('status', $status)->whereDoesntHave('shipment');
             }
         }
         if ($request->filled('company_id')) {
@@ -406,9 +412,10 @@ class BookingController extends Controller
             $booking = Booking::create([
                 ...$data,
                 'user_id' => $user->id,
-                'status' => $isDraft ? 'draft' : 'submitted',
+                'status' => $isDraft ? 'draft' : 'under_review',
                 'estimated_price' => $estimate['estimated_price'] ?? null,
                 'msds_file' => $msdsPath,
+                'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);
 
             if (! empty($data['additional_services'])) {
@@ -458,7 +465,7 @@ class BookingController extends Controller
      */
     public function approve(Request $request, Booking $booking): JsonResponse
     {
-        if (! in_array($booking->status, ['submitted', 'confirmed'])) {
+        if (! in_array($booking->status, ['submitted', 'under_review', 'confirmed'])) {
             return response()->json(['message' => 'Booking tidak dalam status yang bisa dikonfirmasi.'], 422);
         }
 
@@ -491,7 +498,11 @@ class BookingController extends Controller
             return response()->json(['message' => 'Hanya booking draft yang dapat disubmit.'], 422);
         }
 
-        $booking->update(['status' => 'submitted']);
+        if (BookingDraftExpiryService::isExpired($booking)) {
+            return response()->json(['message' => 'Booking draft sudah expired.'], 422);
+        }
+
+        $booking->update(['status' => 'under_review', 'draft_expires_at' => null]);
         $this->logBookingActivity($booking, 'booking_submitted', 'Booking disubmit.', $request->user());
 
         return response()->json([
@@ -520,7 +531,7 @@ class BookingController extends Controller
      */
     public function reject(Request $request, Booking $booking): JsonResponse
     {
-        if (! in_array($booking->status, ['submitted', 'confirmed'])) {
+        if (! in_array($booking->status, ['submitted', 'under_review', 'confirmed'])) {
             return response()->json(['message' => 'Booking tidak dalam status yang bisa ditolak.'], 422);
         }
 
@@ -555,6 +566,7 @@ class BookingController extends Controller
             $copy->approved_by = null;
             $copy->approved_at = null;
             $copy->rejection_reason = null;
+            $copy->draft_expires_at = SystemConfig::draftExpiresAt();
             $copy->save();
 
             foreach ($booking->packages as $pkg) {
@@ -603,6 +615,9 @@ class BookingController extends Controller
             return response()->json(['message' => 'Booking ini sudah memiliki shipment.'], 422);
         }
 
+        $booking->loadMissing('serviceType:id,code');
+        $freeStorage = SystemConfig::defaultFreeStorageDays($booking->serviceType?->code);
+
         $shipment = Shipment::create([
             'booking_id' => $booking->id,
             'company_id' => $booking->company_id,
@@ -623,6 +638,8 @@ class BookingController extends Controller
             'temperature' => $booking->temperature,
             'shipper_snapshot' => $this->buildShipperSnapshot($booking),
             'consignee_snapshot' => $this->buildConsigneeSnapshot($booking),
+            'free_storage_origin_days' => $freeStorage['origin'],
+            'free_storage_destination_days' => $freeStorage['destination'],
         ]);
 
         $this->shipmentConversion->copyCargoFromBooking($shipment, $booking);

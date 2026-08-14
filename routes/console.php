@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 
 // Mark unpaid invoices as overdue when due_date has passed
 Schedule::command('invoices:mark-overdue')->daily();
+Schedule::command('bookings:expire-drafts')->hourly();

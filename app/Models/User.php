@@ -91,6 +91,40 @@ class User extends Authenticatable
         return $this->status === UserStatus::Active;
     }
 
+    public function hasFeatureAccess(string $permission): bool
+    {
+        if ($this->hasRole('super_admin')) {
+            return true;
+        }
+
+        $access = $this->feature_access ?? [];
+
+        if (in_array($permission, $access, true)) {
+            return true;
+        }
+
+        if (str_starts_with($permission, 'view_')) {
+            $suffix = substr($permission, 5);
+            foreach (['manage_', 'edit_', 'create_'] as $prefix) {
+                if (in_array($prefix.$suffix, $access, true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<string> */
+    public function featureAccessList(): array
+    {
+        if ($this->hasRole('super_admin')) {
+            return \App\Enums\UserRole::SuperAdmin->defaultFeatureAccess();
+        }
+
+        return $this->feature_access ?? [];
+    }
+
     /**
      * Kirim link reset password ke frontend Next.js.
      */

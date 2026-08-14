@@ -20,7 +20,7 @@ class DashboardController extends Controller
             'date_to' => 'nullable|date|after_or_equal:date_from',
         ]);
 
-        $fsd = $this->dashboardService->build($validated);
+        $fsd = $this->dashboardService->build($validated, $request->user());
         $summary = $fsd['summary'];
 
         return response()->json([

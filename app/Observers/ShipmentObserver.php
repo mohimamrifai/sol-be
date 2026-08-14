@@ -4,9 +4,11 @@ namespace App\Observers;
 
 use App\Models\AdditionalCharge;
 use App\Models\Shipment;
+use App\Services\OperationTaskService;
 
 class ShipmentObserver
 {
+    public function __construct(private OperationTaskService $operationTaskService) {}
     public function saving(Shipment $shipment): void
     {
         // Rule: Residual always leads to DG
@@ -18,6 +20,12 @@ class ShipmentObserver
     public function saved(Shipment $shipment): void
     {
         $this->syncAutoCharges($shipment);
+
+        if ($shipment->wasRecentlyCreated || $shipment->wasChanged([
+            'shipment_coverage', 'pickup_vendor_id', 'delivery_vendor_id', 'pickup_scheduled_at',
+        ])) {
+            $this->operationTaskService->ensureTasksForShipment($shipment);
+        }
     }
 
     protected function syncAutoCharges(Shipment $shipment): void

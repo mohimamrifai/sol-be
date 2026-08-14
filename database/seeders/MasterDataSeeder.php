@@ -8,9 +8,11 @@ use App\Models\ContainerAsset;
 use App\Models\ContainerType;
 use App\Models\Location;
 use App\Models\ServiceType;
+use App\Models\Station;
 use App\Models\Train;
 use App\Models\TrainCar;
 use App\Models\TransportMode;
+use App\Models\Yard;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -287,7 +289,7 @@ class MasterDataSeeder extends Seeder
 
         $type20 = ContainerType::where('size', '20ft')->first();
         $type40 = ContainerType::where('size', '40ft')->first();
-        $yard = Location::orderBy('id')->first();
+        $yardId = $this->resolveDefaultYardId();
 
         if (! $type20) {
             return;
@@ -303,10 +305,42 @@ class MasterDataSeeder extends Seeder
             ContainerAsset::firstOrCreate(
                 ['container_number' => $row['container_number']],
                 array_merge($row, [
-                    'current_yard_id' => $yard?->id,
+                    'current_yard_id' => $yardId,
                     'status' => 'available',
                 ])
             );
         }
+    }
+
+    private function resolveDefaultYardId(): ?int
+    {
+        if (Schema::hasTable('yards')) {
+            $station = Station::firstOrCreate(
+                ['code' => 'STN-SBY'],
+                [
+                    'name' => 'Surabaya Pasarturi',
+                    'business_entity' => 'company',
+                    'city' => 'Surabaya',
+                    'province' => 'Jawa Timur',
+                    'status' => 'active',
+                ]
+            );
+
+            return Yard::firstOrCreate(
+                ['code' => 'YRD-SBY'],
+                [
+                    'name' => 'Surabaya Container Yard',
+                    'business_entity' => 'company',
+                    'station_id' => $station->id,
+                    'yard_type' => 'origin_yard',
+                    'status' => 'active',
+                    'city' => 'Surabaya',
+                    'province' => 'Jawa Timur',
+                    'country' => 'Indonesia',
+                ]
+            )->id;
+        }
+
+        return Location::orderBy('id')->first()?->id;
     }
 }

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Invoice;
 use App\Models\Payment;
+use App\Support\SystemConfig;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -26,6 +27,8 @@ class MidtransService
 
     public function createSnapTransaction(Invoice $invoice, array $customerDetails, float $amount): array
     {
+        SystemConfig::applyMidtransConfig();
+
         if ($amount <= 0) {
             throw new \InvalidArgumentException('Jumlah pembayaran tidak valid.');
         }
@@ -126,6 +129,8 @@ class MidtransService
      */
     public function verifySignature(array $payload): bool
     {
+        SystemConfig::applyMidtransConfig();
+
         $orderId = (string) ($payload['order_id'] ?? '');
         $statusCode = (string) ($payload['status_code'] ?? '');
         $grossAmount = (string) ($payload['gross_amount'] ?? '');
@@ -182,6 +187,8 @@ class MidtransService
      */
     public function fetchTransactionStatus(string $orderId): array
     {
+        SystemConfig::applyMidtransConfig();
+
         $key = trim(config('midtrans.server_key') ?? '');
         if ($key === '') {
             throw new \RuntimeException('MIDTRANS_SERVER_KEY belum dikonfigurasi.');
