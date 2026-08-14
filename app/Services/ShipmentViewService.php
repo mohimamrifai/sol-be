@@ -99,7 +99,7 @@ class ShipmentViewService
         $containers = $booking->containers()->orderBy('sequence')->get()->map(fn ($c) => [
             'id' => $c->id,
             'sequence' => $c->sequence,
-            'container_type' => $c->containerType?->name ?? $c->containerType?->code,
+            'container_type' => $c->containerType?->name ?? $c->containerType?->size,
             'container_number' => $c->container_number,
             'seal_number' => $c->seal_number,
             'quantity' => (int) ($c->quantity ?? 1),

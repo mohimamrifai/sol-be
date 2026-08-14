@@ -1,5 +1,9 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\AdminVendorInvoiceController;
+use App\Http\Controllers\Api\Admin\AdminVendorJobOrderController;
+use App\Http\Controllers\Api\Admin\AdminVendorPaymentController;
+use App\Http\Controllers\Api\Admin\AdminVendorReportController;
 use App\Http\Controllers\Api\Admin\BookingController as AdminBookingController;
 use App\Http\Controllers\Api\Admin\BranchController;
 use App\Http\Controllers\Api\Admin\CompanyController;
@@ -9,6 +13,7 @@ use App\Http\Controllers\Api\Admin\DashboardController as AdminDashboardControll
 use App\Http\Controllers\Api\Admin\InvoiceController as AdminInvoiceController;
 use App\Http\Controllers\Api\Admin\MasterDataController;
 use App\Http\Controllers\Api\Admin\PaymentController as AdminPaymentController;
+use App\Http\Controllers\Api\Admin\PricingController;
 use App\Http\Controllers\Api\Admin\RoleManagementController;
 use App\Http\Controllers\Api\Admin\ShipmentController as AdminShipmentController;
 use App\Http\Controllers\Api\Admin\UserController;
@@ -259,11 +264,55 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('payments/{payment}', [AdminPaymentController::class, 'show']);
 
         // Vendor & Pricing Management
+        Route::get('vendors/stats', [VendorController::class, 'stats']);
+        Route::post('vendors/{vendor}/deactivate', [VendorController::class, 'deactivate']);
+        Route::post('vendors/{vendor}/contacts', [VendorController::class, 'storeContact']);
+        Route::put('vendors/{vendor}/contacts/{contact}', [VendorController::class, 'updateContact']);
+        Route::delete('vendors/{vendor}/contacts/{contact}', [VendorController::class, 'destroyContact']);
         Route::apiResource('vendors', VendorController::class);
         Route::post('vendors/{vendor}/services', [VendorController::class, 'storeService']);
         Route::post('vendor-services/{vendorService}/pricings', [VendorController::class, 'storePricing']);
+        Route::get('pricings/stats', [PricingController::class, 'stats']);
+        Route::get('pricings', [PricingController::class, 'index']);
+        Route::post('pricings', [PricingController::class, 'store']);
+        Route::get('pricings/{pricing}', [PricingController::class, 'show']);
+        Route::post('pricings/{pricing}/deactivate', [PricingController::class, 'deactivate']);
         Route::put('pricings/{pricing}', [VendorController::class, 'updatePricing']);
         Route::delete('pricings/{pricing}', [VendorController::class, 'destroyPricing']);
+
+        // Admin Vendor Job Order / Invoice / Payment (FSD)
+        Route::get('vendor-job-orders/stats', [AdminVendorJobOrderController::class, 'stats']);
+        Route::get('vendor-job-orders', [AdminVendorJobOrderController::class, 'index']);
+        Route::get('vendor-job-orders/{vendorJobOrder}', [AdminVendorJobOrderController::class, 'show']);
+        Route::put('vendor-job-orders/{vendorJobOrder}', [AdminVendorJobOrderController::class, 'update']);
+        Route::post('vendor-job-orders/{vendorJobOrder}/send', [AdminVendorJobOrderController::class, 'send']);
+        Route::post('vendor-job-orders/{vendorJobOrder}/verify-completion', [AdminVendorJobOrderController::class, 'verifyCompletion']);
+        Route::post('vendor-job-orders/{vendorJobOrder}/documents', [AdminVendorJobOrderController::class, 'storeDocument']);
+        Route::get('vendor-job-orders/{vendorJobOrder}/documents/{document}', [AdminVendorJobOrderController::class, 'downloadDocument']);
+
+        Route::get('vendor-invoices/stats', [AdminVendorInvoiceController::class, 'stats']);
+        Route::get('vendor-invoices/eligible-job-orders', [AdminVendorInvoiceController::class, 'eligibleJobOrders']);
+        Route::get('vendor-invoices', [AdminVendorInvoiceController::class, 'index']);
+        Route::post('vendor-invoices', [AdminVendorInvoiceController::class, 'store']);
+        Route::get('vendor-invoices/{vendorInvoice}', [AdminVendorInvoiceController::class, 'show']);
+        Route::post('vendor-invoices/{vendorInvoice}/start-verification', [AdminVendorInvoiceController::class, 'startVerification']);
+        Route::post('vendor-invoices/{vendorInvoice}/verify', [AdminVendorInvoiceController::class, 'verify']);
+        Route::post('vendor-invoices/{vendorInvoice}/reject', [AdminVendorInvoiceController::class, 'reject']);
+        Route::post('vendor-invoices/{vendorInvoice}/attachments', [AdminVendorInvoiceController::class, 'storeAttachment']);
+
+        Route::get('vendor-payments/stats', [AdminVendorPaymentController::class, 'stats']);
+        Route::get('vendor-payments/company-banks', [AdminVendorPaymentController::class, 'companyBanks']);
+        Route::get('vendor-payments', [AdminVendorPaymentController::class, 'index']);
+        Route::get('vendor-payments/{vendorPaymentRequest}', [AdminVendorPaymentController::class, 'show']);
+        Route::get('vendor-payments/{vendorPaymentRequest}/voucher', [AdminVendorPaymentController::class, 'voucher']);
+        Route::post('vendor-payments/{vendorPaymentRequest}/approve', [AdminVendorPaymentController::class, 'approve']);
+        Route::post('vendor-payments/{vendorPaymentRequest}/reject', [AdminVendorPaymentController::class, 'reject']);
+        Route::post('vendor-payments/{vendorPaymentRequest}/record-payment', [AdminVendorPaymentController::class, 'recordPayment']);
+
+        Route::get('reports/vendor-invoices', [AdminVendorReportController::class, 'invoiceIndex']);
+        Route::get('reports/vendor-invoices/export', [AdminVendorReportController::class, 'invoiceExport']);
+        Route::get('reports/vendor-payments', [AdminVendorReportController::class, 'paymentIndex']);
+        Route::get('reports/vendor-payments/export', [AdminVendorReportController::class, 'paymentExport']);
     });
 
     // ══════════════════════════════════════════

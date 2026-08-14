@@ -9,6 +9,7 @@ use App\Enums\VendorPaymentStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
@@ -20,13 +21,18 @@ class VendorInvoice extends Model
 
     protected $fillable = [
         'vendor_company_id',
+        'vendor_id',
         'shipment_id',
         'invoice_number',
+        'vendor_external_number',
         'invoice_date',
+        'receive_date',
         'due_date',
         'invoice_amount',
         'tax_amount',
         'total_amount',
+        'currency',
+        'source',
         'status',
         'notes',
         'file_path',
@@ -42,14 +48,24 @@ class VendorInvoice extends Model
     {
         return [
             'invoice_date' => 'date',
+            'receive_date' => 'date',
             'due_date' => 'date',
             'invoice_amount' => 'decimal:2',
             'tax_amount' => 'decimal:2',
             'total_amount' => 'decimal:2',
             'submitted_at' => 'datetime',
             'reviewed_at' => 'datetime',
-            'status' => VendorInvoiceStatus::class,
         ];
+    }
+
+    public function isAdminSource(): bool
+    {
+        return $this->source === 'admin';
+    }
+
+    public function statusValue(): string
+    {
+        return (string) ($this->attributes['status'] ?? '');
     }
 
     protected static function booted(): void
@@ -76,6 +92,11 @@ class VendorInvoice extends Model
         return $this->belongsTo(Company::class, 'vendor_company_id');
     }
 
+    public function vendor(): BelongsTo
+    {
+        return $this->belongsTo(Vendor::class);
+    }
+
     public function shipment(): BelongsTo
     {
         return $this->belongsTo(Shipment::class);
@@ -94,6 +115,18 @@ class VendorInvoice extends Model
     public function payments(): HasMany
     {
         return $this->hasMany(VendorPayment::class);
+    }
+
+    public function paymentRequests(): HasMany
+    {
+        return $this->hasMany(VendorPaymentRequest::class);
+    }
+
+    public function jobOrders(): BelongsToMany
+    {
+        return $this->belongsToMany(VendorJobOrder::class, 'vendor_invoice_job_orders')
+            ->withPivot('amount')
+            ->withTimestamps();
     }
 
     public function latestPayment(): HasOne
@@ -125,12 +158,20 @@ class VendorInvoice extends Model
 
     public function isEditable(): bool
     {
-        return in_array($this->status, [VendorInvoiceStatus::Draft, VendorInvoiceStatus::Rejected], true);
+        if ($this->isAdminSource()) {
+            return false;
+        }
+
+        return in_array($this->statusValue(), [VendorInvoiceStatus::Draft->value, VendorInvoiceStatus::Rejected->value], true);
     }
 
     public function isSubmittable(): bool
     {
-        return in_array($this->status, [VendorInvoiceStatus::Draft, VendorInvoiceStatus::Rejected], true)
+        if ($this->isAdminSource()) {
+            return false;
+        }
+
+        return in_array($this->statusValue(), [VendorInvoiceStatus::Draft->value, VendorInvoiceStatus::Rejected->value], true)
             && ! empty($this->file_path);
     }
 }

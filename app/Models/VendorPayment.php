@@ -17,14 +17,17 @@ class VendorPayment extends Model
 
     protected $fillable = [
         'vendor_invoice_id',
+        'vendor_payment_request_id',
         'payment_number',
         'amount',
         'payment_date',
         'payment_method',
+        'company_bank',
         'reference_no',
         'status',
         'receipt_path',
         'transfer_receipt_path',
+        'payment_proof_path',
         'withholding_tax_path',
         'paid_by',
         'notes',
@@ -58,6 +61,11 @@ class VendorPayment extends Model
     public function vendorInvoice(): BelongsTo
     {
         return $this->belongsTo(VendorInvoice::class);
+    }
+
+    public function paymentRequest(): BelongsTo
+    {
+        return $this->belongsTo(VendorPaymentRequest::class, 'vendor_payment_request_id');
     }
 
     public function paidByUser(): BelongsTo

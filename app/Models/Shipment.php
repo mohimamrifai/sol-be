@@ -57,6 +57,7 @@ class Shipment extends Model
         'pickup_driver_name', 'pickup_driver_mobile', 'pickup_vendor_pic', 'pickup_scheduled_at', 'pickup_remark',
         'delivery_vendor_id', 'delivery_vehicle_type', 'delivery_vehicle_plate',
         'delivery_driver_name', 'delivery_driver_mobile', 'delivery_vendor_pic', 'delivery_scheduled_at', 'delivery_remark',
+        'rail_vendor_id',
         'shipper_snapshot', 'consignee_snapshot',
     ];
 
@@ -155,6 +156,16 @@ class Shipment extends Model
     public function deliveryVendor(): BelongsTo
     {
         return $this->belongsTo(Vendor::class, 'delivery_vendor_id');
+    }
+
+    public function railVendor(): BelongsTo
+    {
+        return $this->belongsTo(Vendor::class, 'rail_vendor_id');
+    }
+
+    public function adminVendorJobOrders(): HasMany
+    {
+        return $this->hasMany(VendorJobOrder::class);
     }
 
     public function vendorInvoice(): HasOne

@@ -10,14 +10,17 @@ use App\Models\Rack;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
 use App\Services\ShipmentViewService;
+use App\Services\VendorJobOrderService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ShipmentController extends Controller
 {
     public function __construct(
         private readonly ShipmentViewService $shipmentView,
+        private readonly VendorJobOrderService $vendorJobOrderService,
     ) {}
 
     public function stats(): JsonResponse
@@ -140,7 +143,7 @@ class ShipmentController extends Controller
             'origin_yard_id' => 'nullable|exists:locations,id',
             'destination_yard_id' => 'nullable|exists:locations,id',
             'planning_notes' => 'nullable|string|max:5000',
-            'pickup_vendor_id' => 'nullable|exists:vendors,id',
+            'pickup_vendor_id' => ['nullable', Rule::exists('vendors', 'id')->where('is_active', true)],
             'pickup_vehicle_type' => 'nullable|string|max:60',
             'pickup_vehicle_plate' => 'nullable|string|max:30',
             'pickup_driver_name' => 'nullable|string|max:120',
@@ -148,7 +151,8 @@ class ShipmentController extends Controller
             'pickup_vendor_pic' => 'nullable|string|max:120',
             'pickup_scheduled_at' => 'nullable|date',
             'pickup_remark' => 'nullable|string|max:5000',
-            'delivery_vendor_id' => 'nullable|exists:vendors,id',
+            'delivery_vendor_id' => ['nullable', Rule::exists('vendors', 'id')->where('is_active', true)],
+            'rail_vendor_id' => ['nullable', Rule::exists('vendors', 'id')->where('is_active', true)],
             'delivery_vehicle_type' => 'nullable|string|max:60',
             'delivery_vehicle_plate' => 'nullable|string|max:30',
             'delivery_driver_name' => 'nullable|string|max:120',
@@ -159,6 +163,7 @@ class ShipmentController extends Controller
         ]);
 
         $shipment->update($data);
+        $this->vendorJobOrderService->syncFromShipment($shipment->fresh(), $request->user()?->id);
 
         return response()->json([
             'message' => 'Shipment diperbarui.',

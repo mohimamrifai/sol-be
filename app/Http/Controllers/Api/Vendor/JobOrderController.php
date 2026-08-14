@@ -11,6 +11,7 @@ use App\Models\CompanyActivity;
 use App\Models\Shipment;
 use App\Models\VendorProgressAttachment;
 use App\Models\VendorProgressUpdate;
+use App\Services\VendorJobOrderService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,8 @@ use Illuminate\Support\Facades\Storage;
 
 class JobOrderController extends Controller
 {
+    public function __construct(private readonly VendorJobOrderService $vendorJobOrderService) {}
+
     public function stats(Request $request): JsonResponse
     {
         $vendorCompanyId = $request->user()->company_id;
@@ -204,6 +207,8 @@ class JobOrderController extends Controller
             return $shipment->fresh();
         });
 
+        $this->vendorJobOrderService->syncStatusFromShipment($shipment, $request->user()?->id);
+
         return response()->json([
             'message' => 'Job order berhasil diterima.',
             'data' => (new JobOrderResource($shipment))->resolve($request),
@@ -265,6 +270,8 @@ class JobOrderController extends Controller
 
             return $update->load('attachments');
         });
+
+        $this->vendorJobOrderService->syncStatusFromShipment($shipment->fresh(), $request->user()?->id);
 
         return response()->json([
             'message' => 'Progress berhasil dikirim.',
@@ -328,6 +335,8 @@ class JobOrderController extends Controller
 
             return $shipment->fresh();
         });
+
+        $this->vendorJobOrderService->syncStatusFromShipment($shipment, $request->user()?->id);
 
         return response()->json([
             'message' => 'Penyelesaian job order berhasil diajukan.',
