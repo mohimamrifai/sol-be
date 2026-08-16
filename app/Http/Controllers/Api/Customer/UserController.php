@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\Customer;
 
+use App\Enums\LocationStatus;
 use App\Enums\UserRole;
 use App\Enums\UserStatus;
 use App\Http\Controllers\Controller;
@@ -12,6 +13,7 @@ use App\Http\Requests\Customer\ChangeUserRoleRequest;
 use App\Http\Requests\Customer\ChangeUserStatusRequest;
 use App\Http\Requests\Customer\StoreUserRequest;
 use App\Http\Requests\Customer\UpdateUserRequest;
+use App\Http\Resources\Customer\CompanyActivityResource;
 use App\Http\Resources\Customer\UserResource;
 use App\Http\Resources\Customer\UserStatsResource;
 use App\Models\CustomerLocation;
@@ -59,7 +61,7 @@ class UserController extends Controller
             'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
-        $query = User::with(['roles:id,name', 'locationAccess:id,code,name'])
+        $query = User::with(['roles:id,name', 'locationAccess:id,code,name,type,status'])
             ->where('company_id', $companyId)
             ->where('user_type', 'customer');
 
@@ -81,7 +83,7 @@ class UserController extends Controller
 
         $paginator = $query->orderBy('created_at', 'desc')->paginate($params['per_page'] ?? 15);
 
-        return response()->json($paginator);
+        return UserResource::collection($paginator)->response();
     }
 
     public function store(StoreUserRequest $request): JsonResponse
@@ -94,7 +96,7 @@ class UserController extends Controller
         $validated = $request->validated();
         $role = UserRole::from($validated['role']);
 
-        $this->validateLocationsBelongToCompany($companyId, $validated['location_ids'] ?? []);
+        $this->validateActiveLocationsBelongToCompany($companyId, $validated['location_ids']);
 
         $user = DB::transaction(function () use ($validated, $companyId, $role) {
             $user = User::create([
@@ -109,7 +111,7 @@ class UserController extends Controller
             ]);
 
             $user->assignRole($role);
-            $this->syncLocationAccess($user, $validated['location_ids'] ?? []);
+            $this->syncLocationAccess($user, $validated['location_ids']);
 
             return $user;
         });
@@ -122,14 +124,14 @@ class UserController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $role->value,
-                'location_ids' => $validated['location_ids'] ?? [],
+                'location_ids' => $validated['location_ids'],
             ],
             $request->user()->id
         );
 
         return response()->json([
             'message' => 'Akun pengguna berhasil ditambahkan.',
-            'data' => (new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name'])))->resolve(),
+            'data' => new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name,type,status'])),
         ], 201);
     }
 
@@ -138,7 +140,7 @@ class UserController extends Controller
         $this->authorizeAccess($request, $user);
 
         return response()->json([
-            'data' => (new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name', 'company:id,name'])))->resolve(),
+            'data' => new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name,type,status', 'company:id,name'])),
         ]);
     }
 
@@ -147,61 +149,122 @@ class UserController extends Controller
         $this->authorizeAccess($request, $user);
 
         $validated = $request->validated();
-
         $companyId = (int) $request->user()->company_id;
+        $actorId = (int) $request->user()->id;
+
         if (isset($validated['location_ids'])) {
-            $this->validateLocationsBelongToCompany($companyId, $validated['location_ids']);
+            $this->validateActiveLocationsBelongToCompany($companyId, $validated['location_ids']);
         }
 
-        $before = $user->only(['name', 'phone', 'status']);
-        $updateData = [];
-        if (isset($validated['name'])) {
-            $updateData['name'] = $validated['name'];
-        }
-        if (array_key_exists('phone', $validated)) {
-            $updateData['phone'] = $validated['phone'];
-        }
-        if (isset($validated['status'])) {
-            $this->guardLastAdminStatus($user, $validated['status']);
-            $updateData['status'] = $validated['status'];
-        }
-        if (array_key_exists('feature_access', $validated)) {
-            $updateData['feature_access'] = $validated['feature_access'];
-        }
+        $currentRole = $user->roles->first()?->name;
+        $oldLocationIds = $user->locationAccess()->pluck('customer_locations.id')->sort()->values()->all();
+        $oldFeatureAccess = collect($user->feature_access ?? [])->sort()->values()->all();
+        $oldStatus = $user->status->value;
 
-        DB::transaction(function () use ($user, $updateData, $validated) {
+        DB::transaction(function () use ($user, $validated, $currentRole) {
+            $updateData = [];
+            if (isset($validated['name'])) {
+                $updateData['name'] = $validated['name'];
+            }
+            if (array_key_exists('phone', $validated)) {
+                $updateData['phone'] = $validated['phone'];
+            }
+            if (isset($validated['status'])) {
+                $this->guardLastAdminStatus($user, $validated['status']);
+                $updateData['status'] = $validated['status'];
+            }
+            if (array_key_exists('feature_access', $validated)) {
+                $updateData['feature_access'] = $validated['feature_access'];
+            }
+            if (! empty($validated['password'])) {
+                $updateData['password'] = Hash::make($validated['password']);
+            }
             if (! empty($updateData)) {
                 $user->update($updateData);
             }
+
+            if (isset($validated['role'])) {
+                $newRole = UserRole::from($validated['role']);
+                if ($currentRole !== $newRole->value) {
+                    if ($currentRole === UserRole::CompanyAdmin->value && $newRole !== UserRole::CompanyAdmin) {
+                        $this->guardLastCompanyAdmin($user);
+                    }
+                    $user->syncRoles([$newRole->value]);
+                    if (! array_key_exists('feature_access', $validated)) {
+                        $user->update(['feature_access' => $newRole->defaultFeatureAccess()]);
+                    }
+                }
+            }
+
             if (isset($validated['location_ids'])) {
                 $this->syncLocationAccess($user, $validated['location_ids']);
             }
         });
 
-        $after = $user->fresh()->only(['name', 'phone', 'status']);
-        $changes = [];
-        foreach ($before as $key => $val) {
-            $newVal = $after[$key] instanceof \BackedEnum ? $after[$key]->value : $after[$key];
-            if (($val ?? '') !== ($newVal ?? '')) {
-                $changes[$key] = ['old' => $val, 'new' => $newVal];
-            }
-        }
-        if (isset($validated['location_ids'])) {
-            $changes['location_ids'] = $validated['location_ids'];
-        }
-        if (! empty($changes)) {
+        $user->refresh()->load(['roles:id,name', 'locationAccess:id,code,name,type,status']);
+
+        $newRole = $user->roles->first()?->name;
+        if (isset($validated['role']) && $currentRole !== $newRole) {
             $this->activityLogger->log(
                 $user,
-                'user_updated',
-                'User diperbarui.',
-                ['changes' => $changes],
-                $request->user()->id
+                'user_role_changed',
+                'Role diubah menjadi '.$this->roleLabel($newRole).'.',
+                ['old' => $currentRole, 'new' => $newRole],
+                $actorId
+            );
+        }
+
+        if (isset($validated['location_ids'])) {
+            $newLocationIds = collect($validated['location_ids'])->sort()->values()->all();
+            if ($oldLocationIds !== $newLocationIds) {
+                $this->activityLogger->log(
+                    $user,
+                    'user_location_access_updated',
+                    'Location Access diperbarui.',
+                    ['old' => $oldLocationIds, 'new' => $newLocationIds],
+                    $actorId
+                );
+            }
+        }
+
+        if (array_key_exists('feature_access', $validated)) {
+            $newFeatureAccess = collect($validated['feature_access'] ?? [])->sort()->values()->all();
+            if ($oldFeatureAccess !== $newFeatureAccess) {
+                $this->activityLogger->log(
+                    $user,
+                    'user_feature_access_updated',
+                    'Feature Access diperbarui.',
+                    ['old' => $oldFeatureAccess, 'new' => $newFeatureAccess],
+                    $actorId
+                );
+            }
+        }
+
+        if (isset($validated['status']) && $validated['status'] !== $oldStatus) {
+            if ($validated['status'] === UserStatus::Inactive->value) {
+                $this->activityLogger->log(
+                    $user,
+                    'user_deactivated',
+                    'User dinonaktifkan.',
+                    ['old' => $oldStatus, 'new' => $validated['status']],
+                    $actorId
+                );
+            }
+        }
+
+        if (! empty($validated['password'])) {
+            $this->activityLogger->log(
+                $user,
+                'user_password_reset',
+                'Password direset.',
+                [],
+                $actorId
             );
         }
 
         return response()->json([
             'message' => 'Akun pengguna berhasil diperbarui.',
-            'data' => (new UserResource($user->fresh()->load(['roles:id,name', 'locationAccess:id,code,name'])))->resolve(),
+            'data' => new UserResource($user),
         ]);
     }
 
@@ -213,28 +276,33 @@ class UserController extends Controller
         $newRole = UserRole::from($validated['role']);
         $currentRole = $user->roles->first()?->name;
 
+        if ($currentRole === $newRole->value) {
+            return response()->json([
+                'message' => 'Role berhasil diperbarui.',
+                'data' => new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name,type,status'])),
+            ]);
+        }
+
         if ($currentRole === UserRole::CompanyAdmin->value && $newRole !== UserRole::CompanyAdmin) {
             $this->guardLastCompanyAdmin($user);
         }
 
         DB::transaction(function () use ($user, $newRole) {
             $user->syncRoles([$newRole->value]);
-            if ($newRole !== UserRole::CompanyAdmin) {
-                $user->update(['feature_access' => $newRole->defaultFeatureAccess()]);
-            }
+            $user->update(['feature_access' => $newRole->defaultFeatureAccess()]);
         });
 
         $this->activityLogger->log(
             $user,
             'user_role_changed',
-            'Role diubah menjadi '.$newRole->value.'.',
+            'Role diubah menjadi '.$newRole->label().'.',
             ['old' => $currentRole, 'new' => $newRole->value],
             $request->user()->id
         );
 
         return response()->json([
             'message' => 'Role berhasil diperbarui.',
-            'data' => (new UserResource($user->fresh()->load(['roles:id,name', 'locationAccess:id,code,name'])))->resolve(),
+            'data' => new UserResource($user->fresh()->load(['roles:id,name', 'locationAccess:id,code,name,type,status'])),
         ]);
     }
 
@@ -248,19 +316,28 @@ class UserController extends Controller
         $this->guardLastAdminStatus($user, $newStatus->value);
 
         $old = $user->status->value;
+        if ($old === $newStatus->value) {
+            return response()->json([
+                'message' => 'Status user berhasil diperbarui.',
+                'data' => new UserResource($user->load(['roles:id,name', 'locationAccess:id,code,name,type,status'])),
+            ]);
+        }
+
         $user->update(['status' => $newStatus]);
 
-        $this->activityLogger->log(
-            $user,
-            $newStatus === UserStatus::Active ? 'user_activated' : 'user_deactivated',
-            $newStatus === UserStatus::Active ? 'User diaktifkan.' : 'User dinonaktifkan.',
-            ['old' => $old, 'new' => $newStatus->value],
-            $request->user()->id
-        );
+        if ($newStatus === UserStatus::Inactive) {
+            $this->activityLogger->log(
+                $user,
+                'user_deactivated',
+                'User dinonaktifkan.',
+                ['old' => $old, 'new' => $newStatus->value],
+                $request->user()->id
+            );
+        }
 
         return response()->json([
             'message' => 'Status user berhasil diperbarui.',
-            'data' => (new UserResource($user->fresh()->load(['roles:id,name', 'locationAccess:id,code,name'])))->resolve(),
+            'data' => new UserResource($user->fresh()->load(['roles:id,name', 'locationAccess:id,code,name,type,status'])),
         ]);
     }
 
@@ -286,14 +363,18 @@ class UserController extends Controller
     {
         $this->authorizeAccess($request, $user);
 
-        $activities = $user->activities()->with('actor:id,name,email')->paginate(15);
+        $activities = $user->activities()
+            ->with('actor:id,name,email')
+            ->orderByDesc('occurred_at')
+            ->paginate($request->integer('per_page', 15));
 
-        return response()->json($activities);
+        return CompanyActivityResource::collection($activities)->response();
     }
 
     private function authorizeAccess(Request $request, User $user): void
     {
-        if ((int) $user->company_id !== (int) $request->user()->company_id) {
+        if ((int) $user->company_id !== (int) $request->user()->company_id
+            || $user->user_type !== 'customer') {
             abort(response()->json(['message' => 'User not found.'], 404));
         }
     }
@@ -321,18 +402,27 @@ class UserController extends Controller
         }
     }
 
-    private function validateLocationsBelongToCompany(int $companyId, array $locationIds): void
+    /**
+     * @param  list<int>  $locationIds
+     */
+    private function validateActiveLocationsBelongToCompany(int $companyId, array $locationIds): void
     {
-        if (empty($locationIds)) {
-            return;
+        if (count($locationIds) < 1) {
+            abort(response()->json([
+                'message' => 'Minimal 1 Location Access wajib dipilih.',
+                'errors' => ['location_ids' => ['Minimal 1 Location Access wajib dipilih.']],
+            ], 422));
         }
+
         $validCount = CustomerLocation::where('company_id', $companyId)
+            ->where('status', LocationStatus::Active)
             ->whereIn('id', $locationIds)
             ->count();
+
         if ($validCount !== count($locationIds)) {
             abort(response()->json([
-                'message' => 'Salah satu Location tidak ditemukan atau bukan milik perusahaan Anda.',
-                'errors' => ['location_ids' => ['Invalid location id.']],
+                'message' => 'Location Access harus dari Customer Location berstatus Active milik perusahaan Anda.',
+                'errors' => ['location_ids' => ['Invalid or inactive location id.']],
             ], 422));
         }
     }
@@ -340,5 +430,18 @@ class UserController extends Controller
     private function syncLocationAccess(User $user, array $locationIds): void
     {
         $user->locationAccess()->sync($locationIds);
+    }
+
+    private function roleLabel(?string $role): string
+    {
+        if ($role === null) {
+            return '';
+        }
+
+        try {
+            return UserRole::from($role)->label();
+        } catch (\ValueError) {
+            return $role;
+        }
     }
 }

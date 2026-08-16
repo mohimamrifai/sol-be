@@ -12,13 +12,18 @@ class ChangeUserRoleRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return $this->user() !== null && $this->user()->can('edit_users');
     }
 
     public function rules(): array
     {
         return [
-            'role' => ['required', Rule::enum(UserRole::class)],
+            'role' => ['required', Rule::in([
+                UserRole::CompanyAdmin->value,
+                UserRole::OpsPic->value,
+                UserRole::FinancePic->value,
+                UserRole::Viewer->value,
+            ])],
         ];
     }
 }

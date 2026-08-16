@@ -12,7 +12,7 @@ class ChangeUserStatusRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return $this->user() !== null && $this->user()->can('edit_users');
     }
 
     public function rules(): array
