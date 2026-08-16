@@ -14,6 +14,7 @@ class CompanyActivityResource extends JsonResource
         return [
             'id' => $this->id,
             'event_key' => $this->event_key,
+            'title' => $this->description,
             'description' => $this->description,
             'meta' => $this->meta,
             'actor' => $this->whenLoaded('actor', fn () => [
@@ -21,6 +22,7 @@ class CompanyActivityResource extends JsonResource
                 'name' => $this->actor->name,
                 'email' => $this->actor->email,
             ]),
+            'actor_name' => $this->whenLoaded('actor', fn () => $this->actor?->name),
             'occurred_at' => $this->occurred_at?->toIso8601String(),
         ];
     }

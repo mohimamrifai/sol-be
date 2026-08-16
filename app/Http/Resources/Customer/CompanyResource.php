@@ -6,11 +6,20 @@ namespace App\Http\Resources\Customer;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Storage;
 
 class CompanyResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $logoUrl = null;
+        if ($this->logo_path) {
+            $logoUrl = Storage::disk('public')->url($this->logo_path);
+            if ($request->getSchemeAndHttpHost()) {
+                $logoUrl = $request->getSchemeAndHttpHost().parse_url($logoUrl, PHP_URL_PATH);
+            }
+        }
+
         return [
             'id' => $this->id,
             'name' => $this->name,
@@ -21,6 +30,7 @@ class CompanyResource extends JsonResource
             'email' => $this->email,
             'phone' => $this->phone,
             'website' => $this->website,
+            'logo_url' => $logoUrl,
             'address' => $this->address,
             'country' => $this->country,
             'province' => $this->province,

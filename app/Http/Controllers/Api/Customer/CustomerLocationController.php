@@ -10,6 +10,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Customer\ChangeLocationStatusRequest;
 use App\Http\Requests\Customer\StoreLocationRequest;
 use App\Http\Requests\Customer\UpdateLocationRequest;
+use App\Http\Resources\Customer\CompanyActivityResource;
 use App\Http\Resources\Customer\CustomerLocationResource;
 use App\Http\Resources\Customer\LocationStatsResource;
 use App\Models\CustomerLocation;
@@ -21,6 +22,21 @@ use Illuminate\Support\Facades\DB;
 
 class CustomerLocationController extends Controller
 {
+    private const ADDRESS_FIELDS = [
+        'country',
+        'province',
+        'city',
+        'district',
+        'postal_code',
+        'address',
+    ];
+
+    private const PIC_FIELDS = [
+        'pic_name',
+        'pic_email',
+        'pic_mobile',
+    ];
+
     public function __construct(
         private CompanyActivityLogger $activityLogger,
         private LocationCodeService $locationCode,
@@ -184,18 +200,14 @@ class CustomerLocationController extends Controller
         $changes = [];
         foreach ($before as $key => $val) {
             $newVal = $after[$key] instanceof \BackedEnum ? $after[$key]->value : $after[$key];
-            if (($val ?? '') !== ($newVal ?? '')) {
-                $changes[$key] = ['old' => $val, 'new' => $newVal];
+            $oldVal = $val instanceof \BackedEnum ? $val->value : $val;
+            if (($oldVal ?? '') !== ($newVal ?? '')) {
+                $changes[$key] = ['old' => $oldVal, 'new' => $newVal];
             }
         }
-        if (! empty($changes)) {
-            $this->activityLogger->log(
-                $location,
-                'location_updated',
-                'Location diperbarui.',
-                ['changes' => $changes],
-                $user->id
-            );
+
+        if ($changes !== []) {
+            $this->logLocationChanges($location, $changes, $user->id);
         }
 
         return response()->json([
@@ -212,26 +224,21 @@ class CustomerLocationController extends Controller
         }
 
         $data = $request->validated();
+        $oldStatus = $location->status->value;
 
-        if ($data['status'] === LocationStatus::Inactive->value && $location->isHeadOffice()) {
-            $headCount = CustomerLocation::where('company_id', $location->company_id)
-                ->where('type', LocationType::HeadOffice)
-                ->where('status', LocationStatus::Active)
-                ->count();
-            if ($headCount <= 1) {
-                return response()->json([
-                    'message' => 'Tidak dapat menonaktifkan satu-satunya Head Office aktif.',
-                ], 422);
-            }
+        if ($oldStatus === $data['status']) {
+            return response()->json([
+                'message' => 'Status Location berhasil diperbarui.',
+                'data' => new CustomerLocationResource($location),
+            ]);
         }
 
-        $oldStatus = $location->status->value;
         $location->update(['status' => $data['status']]);
 
         $this->activityLogger->log(
             $location,
             'location_status_changed',
-            'Status diubah menjadi '.ucfirst($data['status']).'.',
+            $this->statusActivityMessage($data['status']),
             ['old' => $oldStatus, 'new' => $data['status']],
             $user->id
         );
@@ -249,8 +256,58 @@ class CustomerLocationController extends Controller
             return response()->json(['message' => 'Location not found.'], 404);
         }
 
-        $activities = $location->activities()->with('actor:id,name,email')->paginate(15);
+        $activities = $location->activities()
+            ->with('actor:id,name,email')
+            ->orderByDesc('occurred_at')
+            ->paginate($request->integer('per_page', 15));
 
-        return response()->json($activities);
+        return CompanyActivityResource::collection($activities)->response();
+    }
+
+    /**
+     * @param  array<string, array{old: mixed, new: mixed}>  $changes
+     */
+    private function logLocationChanges(CustomerLocation $location, array $changes, int $userId): void
+    {
+        $addressChanges = array_intersect_key($changes, array_flip(self::ADDRESS_FIELDS));
+        $picChanges = array_intersect_key($changes, array_flip(self::PIC_FIELDS));
+        $statusChange = $changes['status'] ?? null;
+
+        if ($addressChanges !== []) {
+            $this->activityLogger->log(
+                $location,
+                'location_address_updated',
+                'Alamat Location diperbarui.',
+                ['changes' => $addressChanges],
+                $userId
+            );
+        }
+
+        if ($picChanges !== []) {
+            $this->activityLogger->log(
+                $location,
+                'location_pic_updated',
+                'PIC diperbarui.',
+                ['changes' => $picChanges],
+                $userId
+            );
+        }
+
+        if ($statusChange !== null) {
+            $this->activityLogger->log(
+                $location,
+                'location_status_changed',
+                $this->statusActivityMessage((string) $statusChange['new']),
+                ['old' => $statusChange['old'], 'new' => $statusChange['new']],
+                $userId
+            );
+        }
+    }
+
+    private function statusActivityMessage(string $status): string
+    {
+        $label = ucfirst($status);
+
+        return "Status diubah menjadi {$label}.";
     }
 }

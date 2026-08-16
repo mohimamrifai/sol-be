@@ -25,6 +25,7 @@ class CompanyDocumentResource extends JsonResource
                 'name' => $this->uploader->name,
             ]),
             'verified_at' => $this->verified_at?->toIso8601String(),
+            'uploaded_at' => $this->created_at?->toIso8601String(),
             'created_at' => $this->created_at?->toIso8601String(),
             'download_url' => route('customer.company.documents.download', $this->id, false),
             'preview_url' => route('customer.company.documents.show', $this->id, false),

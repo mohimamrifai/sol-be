@@ -36,6 +36,7 @@ class Company extends Model
         'email',
         'phone',
         'website',
+        'logo_path',
         'pic_name',
         'pic_email',
         'pic_mobile',

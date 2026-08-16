@@ -12,7 +12,7 @@ class ChangeLocationStatusRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return $this->user() !== null && $this->user()->can('view_locations');
     }
 
     public function rules(): array

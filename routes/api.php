@@ -494,6 +494,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Company Settings
         Route::get('company', [CustomerCompanyController::class, 'show'])->name('customer.company.show');
         Route::put('company', [CustomerCompanyController::class, 'update'])->name('customer.company.update');
+        Route::post('company/logo', [CustomerCompanyController::class, 'uploadLogo'])->name('customer.company.logo.upload');
         Route::get('company/commercial', [CustomerCompanyController::class, 'commercial'])->name('customer.company.commercial');
         Route::get('company/activities', [CustomerCompanyController::class, 'activities'])->name('customer.company.activities');
 
@@ -502,7 +503,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('company/documents', [CustomerCompanyDocumentController::class, 'store'])->name('customer.company.documents.store');
         Route::get('company/documents/{document}', [CustomerCompanyDocumentController::class, 'show'])->name('customer.company.documents.show');
         Route::get('company/documents/{document}/download', [CustomerCompanyDocumentController::class, 'download'])->name('customer.company.documents.download');
-        Route::delete('company/documents/{document}', [CustomerCompanyDocumentController::class, 'destroy'])->name('customer.company.documents.destroy');
 
         // Locations
         Route::get('locations/stats', [CustomerLocationController::class, 'stats'])->name('customer.locations.stats');

@@ -7,7 +7,7 @@ namespace App\Http\Controllers\Api\Customer;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Customer\StoreCompanyDocumentRequest;
 use App\Http\Resources\Customer\CompanyDocumentResource;
-use App\Models\Company;
+use App\Enums\CompanyDocumentType;
 use App\Models\CompanyDocument;
 use App\Services\CompanyActivityLogger;
 use Illuminate\Http\JsonResponse;
@@ -25,11 +25,12 @@ class CompanyDocumentController extends Controller
         private CompanyActivityLogger $activityLogger
     ) {}
 
-    public function index(Request $request, Company $company): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
-        if ($company->id !== $user->company_id) {
-            return response()->json(['message' => 'Company not found.'], 404);
+        $company = $request->user()->company;
+
+        if (! $company) {
+            return response()->json(['message' => 'Perusahaan tidak ditemukan.'], 404);
         }
 
         $documents = $company->documents()->with('uploader:id,name,email')->get();
@@ -39,20 +40,25 @@ class CompanyDocumentController extends Controller
         ]);
     }
 
-    public function store(StoreCompanyDocumentRequest $request, Company $company): JsonResponse
+    public function store(StoreCompanyDocumentRequest $request): JsonResponse
     {
         $user = $request->user();
-        if ($company->id !== $user->company_id) {
-            return response()->json(['message' => 'Company not found.'], 404);
+        $company = $user->company;
+
+        if (! $company) {
+            return response()->json(['message' => 'Perusahaan tidak ditemukan.'], 404);
         }
 
         $data = $request->validated();
         $file = $request->file('file');
+        $type = $data['type'] instanceof CompanyDocumentType
+            ? $data['type']
+            : CompanyDocumentType::from((string) $data['type']);
 
         $extension = $file->getClientOriginalExtension() ?: 'bin';
         $filename = Str::uuid()->toString().'.'.$extension;
         $stored = $file->storeAs(
-            "company-documents/{$company->id}/{$data['type']->value}",
+            "company-documents/{$company->id}/{$type->value}",
             $filename,
             self::DISK
         );
@@ -63,7 +69,7 @@ class CompanyDocumentController extends Controller
 
         $document = CompanyDocument::create([
             'company_id' => $company->id,
-            'type' => $data['type']->value,
+            'type' => $type->value,
             'label' => $data['label'] ?? null,
             'file_path' => $stored,
             'file_size' => $file->getSize(),
@@ -71,11 +77,12 @@ class CompanyDocumentController extends Controller
             'uploaded_by_user_id' => $user->id,
         ]);
 
+        $typeLabel = $type->label();
         $this->activityLogger->log(
             $company,
             'company_document_uploaded',
-            'Dokumen '.strtoupper($data['type']->value).' diperbarui.',
-            ['document_id' => $document->id, 'type' => $data['type']->value],
+            'Dokumen '.$typeLabel.' diperbarui.',
+            ['document_id' => $document->id, 'type' => $type->value],
             $user->id
         );
 
@@ -85,49 +92,26 @@ class CompanyDocumentController extends Controller
         ], 201);
     }
 
-    public function show(Request $request, Company $company, CompanyDocument $document): StreamedResponse|BinaryFileResponse|JsonResponse
+    public function show(Request $request, CompanyDocument $document): StreamedResponse|BinaryFileResponse|JsonResponse
     {
-        $user = $request->user();
-        if ($company->id !== $user->company_id || $document->company_id !== $company->id) {
+        $company = $request->user()->company;
+
+        if (! $company || $document->company_id !== $company->id) {
             return response()->json(['message' => 'Document not found.'], 404);
         }
 
         return $this->serveFile($document, inline: true);
     }
 
-    public function download(Request $request, Company $company, CompanyDocument $document): StreamedResponse|BinaryFileResponse|JsonResponse
+    public function download(Request $request, CompanyDocument $document): StreamedResponse|BinaryFileResponse|JsonResponse
     {
-        $user = $request->user();
-        if ($company->id !== $user->company_id || $document->company_id !== $company->id) {
+        $company = $request->user()->company;
+
+        if (! $company || $document->company_id !== $company->id) {
             return response()->json(['message' => 'Document not found.'], 404);
         }
 
         return $this->serveFile($document, inline: false);
-    }
-
-    public function destroy(Request $request, Company $company, CompanyDocument $document): JsonResponse
-    {
-        $user = $request->user();
-        if ($company->id !== $user->company_id || $document->company_id !== $company->id) {
-            return response()->json(['message' => 'Document not found.'], 404);
-        }
-
-        if (Storage::disk(self::DISK)->exists($document->file_path)) {
-            Storage::disk(self::DISK)->delete($document->file_path);
-        }
-
-        $type = $document->type->value;
-        $document->delete();
-
-        $this->activityLogger->log(
-            $company,
-            'company_document_deleted',
-            'Dokumen '.strtoupper($type).' dihapus.',
-            ['type' => $type],
-            $user->id
-        );
-
-        return response()->json(['message' => 'Dokumen berhasil dihapus.']);
     }
 
     private function serveFile(CompanyDocument $document, bool $inline): StreamedResponse|BinaryFileResponse
