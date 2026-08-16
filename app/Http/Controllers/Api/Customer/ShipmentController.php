@@ -133,11 +133,12 @@ class ShipmentController extends Controller
         }
 
         $shipment->load([
+            'company:id,name',
             'originLocation', 'destinationLocation', 'transportMode', 'serviceType',
             'cargoCategory', 'dgClass', 'invoice',
             'booking' => fn ($q) => $q->with([
                 'serviceType', 'cargoCategory', 'dgClass', 'attachments',
-                'packages', 'containers.containerType', 'additionalServices',
+                'packages.cargoCategory', 'containers.containerType', 'containers.cargoCategory', 'additionalServices',
             ]),
             'trackings' => fn ($q) => $q->orderBy('tracked_at', 'asc')->with('photos'),
             'createdByUser:id,name',
@@ -146,6 +147,7 @@ class ShipmentController extends Controller
         $payload = $shipment->toArray();
         $payload['documents'] = $this->view->documents($shipment);
         $payload['cargo'] = $this->view->cargo($shipment);
+        $payload['tracking_timeline'] = $this->view->trackingTimeline($shipment);
         $payload['activity_log'] = $this->view->activityLog($shipment);
 
         return response()->json(['data' => $payload]);

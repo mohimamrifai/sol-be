@@ -250,6 +250,7 @@ class VendorPortalTest extends TestCase
         $file = UploadedFile::fake()->create('invoice.pdf', 100);
         $res = $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 1000000,
@@ -262,7 +263,7 @@ class VendorPortalTest extends TestCase
         $this->assertSame($job->id, $inv->shipment_id);
     }
 
-    public function test_invoice_number_is_generated_with_vendor_prefix(): void
+    public function test_manual_invoice_number_is_stored(): void
     {
         $job = $this->createJobOrder(VendorJobStatus::Completed);
         Sanctum::actingAs($this->vendorAdmin);
@@ -270,13 +271,14 @@ class VendorPortalTest extends TestCase
         $file = UploadedFile::fake()->create('inv.pdf', 50);
         $res = $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-CUSTOM-999',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 500000,
             'invoice_file' => $file,
         ])->assertCreated();
 
-        $this->assertStringStartsWith('INV-V-', $res->json('data.invoice_number'));
+        $this->assertSame('INV-V-CUSTOM-999', $res->json('data.invoice_number'));
     }
 
     public function test_vendor_cannot_create_duplicate_invoice_for_same_job(): void
@@ -287,6 +289,7 @@ class VendorPortalTest extends TestCase
         $file = UploadedFile::fake()->create('inv.pdf', 50);
         $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 1000,
@@ -296,6 +299,7 @@ class VendorPortalTest extends TestCase
         $file2 = UploadedFile::fake()->create('inv2.pdf', 50);
         $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 1000,
@@ -311,6 +315,7 @@ class VendorPortalTest extends TestCase
         $file = UploadedFile::fake()->create('inv.pdf', 50);
         $res = $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 1000,
@@ -378,8 +383,8 @@ class VendorPortalTest extends TestCase
 
     public function test_user_cannot_deactivate_self(): void
     {
-        Sanctum::actingAs($this->vendorOps);
-        $this->patchJson("/api/vendor/users/{$this->vendorOps->id}/status", [
+        Sanctum::actingAs($this->vendorAdmin);
+        $this->patchJson("/api/vendor/users/{$this->vendorAdmin->id}/status", [
             'status' => 'inactive',
         ])->assertStatus(422);
     }
@@ -390,6 +395,7 @@ class VendorPortalTest extends TestCase
         $res = $this->postJson('/api/vendor/users', [
             'name' => 'New User',
             'email' => 'new@v.test',
+            'phone' => '08123456789',
             'role' => 'vendor_ops_pic',
         ])->assertCreated();
         $this->assertNotEmpty($res->json('temporary_password'));
@@ -416,6 +422,7 @@ class VendorPortalTest extends TestCase
             'invoice_number' => 'INV-V-XXXXXX',
             'vendor_company_id' => $this->vendorCompany->id,
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 1000,
@@ -594,10 +601,63 @@ class VendorPortalTest extends TestCase
         $file = UploadedFile::fake()->create('inv.pdf', 50);
         $this->postJson('/api/vendor/invoices', [
             'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-MANUAL-001',
             'invoice_date' => '2026-08-01',
             'due_date' => '2026-08-15',
             'invoice_amount' => 100,
             'invoice_file' => $file,
+        ])->assertStatus(403);
+    }
+
+    public function test_vendor_can_reject_job_order(): void
+    {
+        $job = $this->createJobOrder(VendorJobStatus::PendingAcceptance);
+        Sanctum::actingAs($this->vendorOps);
+
+        $this->postJson("/api/vendor/job-orders/{$job->id}/reject", [
+            'rejection_reason' => 'Not available this week.',
+        ])->assertOk();
+
+        $job->refresh();
+        $this->assertSame(VendorJobStatus::Rejected->value, $job->vendor_status);
+        $this->assertSame('Not available this week.', $job->vendor_rejection_reason);
+    }
+
+    public function test_ops_pic_cannot_create_invoice(): void
+    {
+        $job = $this->createJobOrder(VendorJobStatus::Completed);
+        Sanctum::actingAs($this->vendorOps);
+        $file = UploadedFile::fake()->create('inv.pdf', 50);
+        $this->postJson('/api/vendor/invoices', [
+            'shipment_id' => $job->id,
+            'invoice_number' => 'INV-V-OPS-001',
+            'invoice_date' => '2026-08-01',
+            'due_date' => '2026-08-15',
+            'invoice_amount' => 100,
+            'invoice_file' => $file,
+        ])->assertStatus(403);
+    }
+
+    public function test_vendor_documents_index_returns_aggregated_list(): void
+    {
+        $job = $this->createJobOrder(VendorJobStatus::Completed);
+        Sanctum::actingAs($this->vendorAdmin);
+
+        $res = $this->getJson('/api/vendor/documents')->assertOk();
+        $this->assertNotEmpty($res->json('data'));
+        $types = collect($res->json('data'))->pluck('document_type')->unique()->values()->all();
+        $this->assertContains('job_order', $types);
+        $this->assertContains('consignment_note', $types);
+    }
+
+    public function test_non_admin_cannot_create_vendor_user(): void
+    {
+        Sanctum::actingAs($this->vendorOps);
+        $this->postJson('/api/vendor/users', [
+            'name' => 'New User',
+            'email' => 'newuser@v.test',
+            'phone' => '08123456789',
+            'role' => 'vendor_viewer',
         ])->assertStatus(403);
     }
 }

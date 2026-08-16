@@ -24,6 +24,7 @@ class BookingPackage extends Model
         'piece_count',
         'package_type',
         'remark',
+        'cargo_category_id',
         'is_dangerous_goods',
         'dg_class_id',
         'un_number',
@@ -56,5 +57,10 @@ class BookingPackage extends Model
     public function dgClass(): BelongsTo
     {
         return $this->belongsTo(DgClass::class);
+    }
+
+    public function cargoCategory(): BelongsTo
+    {
+        return $this->belongsTo(CargoCategory::class);
     }
 }

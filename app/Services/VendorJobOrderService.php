@@ -195,7 +195,6 @@ class VendorJobOrderService
             $jo = VendorJobOrder::create(array_merge($payload, ['shipment_id' => $shipment->id]));
             $this->logActivity($jo, 'JO dibuat.', $actorUserId);
             $this->logActivity($jo, 'Vendor diassign.', $actorUserId);
-            $this->sendJobOrder($jo->fresh(), $actorUserId);
         });
     }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\AdminVendorPaymentRequestStatus;
+use App\Models\VendorPaymentDocument;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -62,6 +63,11 @@ class VendorPaymentRequest extends Model
     public function payments(): HasMany
     {
         return $this->hasMany(VendorPayment::class);
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(VendorPaymentDocument::class);
     }
 
     public function outstandingAmount(): float

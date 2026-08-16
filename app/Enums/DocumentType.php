@@ -22,6 +22,7 @@ enum DocumentType: string
     case TaxInvoice = 'tax_invoice';
     case PaymentReceipt = 'payment_receipt';
     case OtherSupporting = 'other_supporting';
+    case MsdsFile = 'msds_file';
 
     public function prefix(): string
     {
@@ -34,6 +35,7 @@ enum DocumentType: string
             self::TaxInvoice => 'tinv',
             self::PaymentReceipt => 'rcp',
             self::OtherSupporting => 'oth',
+            self::MsdsFile => 'msds',
         };
     }
 
@@ -41,7 +43,8 @@ enum DocumentType: string
     {
         return match ($this) {
             self::BookingAttachment,
-            self::OtherSupporting => 'booking',
+            self::OtherSupporting,
+            self::MsdsFile => 'booking',
             self::ConsignmentNote,
             self::DeliveryOrder,
             self::ProofOfDelivery => 'shipment',

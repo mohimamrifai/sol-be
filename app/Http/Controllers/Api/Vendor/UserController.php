@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\Vendor;
 
 use App\Enums\UserStatus;
 use App\Enums\VendorUserRole;
+use App\Http\Controllers\Api\Vendor\Concerns\AuthorizesVendorRoles;
 use App\Http\Controllers\Controller;
 use App\Models\CompanyActivity;
 use App\Models\User;
@@ -16,6 +17,8 @@ use Illuminate\Support\Str;
 
 class UserController extends Controller
 {
+    use AuthorizesVendorRoles;
+
     public function stats(Request $request): JsonResponse
     {
         $companyId = $request->user()->company_id;
@@ -91,10 +94,11 @@ class UserController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $validated = $request->validate([
             'name' => 'required|string|max:120',
             'email' => 'required|email|max:120|unique:users,email',
-            'phone' => 'nullable|string|max:30',
+            'phone' => 'required|string|max:30',
             'role' => 'required|string|in:'.implode(',', VendorUserRole::values()),
         ]);
 
@@ -134,6 +138,7 @@ class UserController extends Controller
 
     public function update(Request $request, User $user): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $this->authorizeVendorAccess($request, $user);
 
         $validated = $request->validate([
@@ -160,6 +165,7 @@ class UserController extends Controller
 
     public function changeRole(Request $request, User $user): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $this->authorizeVendorAccess($request, $user);
 
         $validated = $request->validate([
@@ -199,6 +205,7 @@ class UserController extends Controller
 
     public function changeStatus(Request $request, User $user): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $this->authorizeVendorAccess($request, $user);
 
         $validated = $request->validate([
@@ -242,6 +249,7 @@ class UserController extends Controller
 
     public function resetPassword(Request $request, User $user): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $this->authorizeVendorAccess($request, $user);
 
         $temporaryPassword = Str::random(10);

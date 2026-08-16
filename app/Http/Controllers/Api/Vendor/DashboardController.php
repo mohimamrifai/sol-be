@@ -6,22 +6,26 @@ namespace App\Http\Controllers\Api\Vendor;
 
 use App\Enums\VendorInvoiceStatus;
 use App\Enums\VendorJobStatus;
+use App\Http\Controllers\Api\Vendor\Concerns\AuthorizesVendorRoles;
 use App\Http\Controllers\Controller;
 use App\Models\CompanyActivity;
 use App\Models\Shipment;
 use App\Models\VendorInvoice;
+use App\Support\VendorShipmentHelper;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 class DashboardController extends Controller
 {
+    use AuthorizesVendorRoles;
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
         $vendorCompanyId = $user->company_id;
+        $quickActionAccess = $this->userQuickActions($request);
 
-        // 4 Stats Cards
         $stats = [
             'pending_acceptance' => Shipment::forVendor($vendorCompanyId)
                 ->where('vendor_status', VendorJobStatus::PendingAcceptance->value)
@@ -41,25 +45,22 @@ class DashboardController extends Controller
                 ->count(),
         ];
 
-        // My Job Orders (5 latest)
         $myJobOrders = Shipment::forVendor($vendorCompanyId)
-            ->with(['company:id,name,company_code', 'serviceType:id,code,name', 'originLocation:id,code,name', 'destinationLocation:id,code,name'])
+            ->with(['company:id,name,company_code', 'serviceType:id,code,name'])
             ->orderByDesc('created_at')
             ->limit(5)
             ->get()
             ->map(fn ($s) => [
                 'id' => $s->id,
-                'jo_number' => 'JO-'.str_pad((string) $s->id, 5, '0', STR_PAD_LEFT),
+                'jo_number' => VendorShipmentHelper::joNumber($s),
                 'shipment_number' => $s->shipment_number,
                 'customer_name' => $s->company?->name,
                 'service' => $s->serviceType?->name,
-                'origin' => $s->originLocation?->name,
-                'destination' => $s->destinationLocation?->name,
+                'assigned_date' => $s->created_at?->toDateString(),
                 'due_date' => $s->estimated_arrival?->toDateString(),
                 'vendor_status' => $s->vendor_status,
             ]);
 
-        // Performance summary
         $performance = [
             'active_job_orders' => $stats['pending_acceptance'] + $stats['in_progress'],
             'completed_this_month' => Shipment::forVendor($vendorCompanyId)
@@ -73,11 +74,9 @@ class DashboardController extends Controller
                     VendorInvoiceStatus::Submitted->value,
                     VendorInvoiceStatus::Approved->value,
                 ])
-                ->where('status', '!=', VendorInvoiceStatus::Paid->value)
                 ->sum('total_amount'),
         ];
 
-        // Upcoming Deadlines (top 5 job orders with due_date approaching, not yet completed)
         $upcomingDeadlines = Shipment::forVendor($vendorCompanyId)
             ->whereIn('vendor_status', [
                 VendorJobStatus::PendingAcceptance->value,
@@ -96,7 +95,7 @@ class DashboardController extends Controller
 
                 return [
                     'id' => $s->id,
-                    'jo_number' => 'JO-'.str_pad((string) $s->id, 5, '0', STR_PAD_LEFT),
+                    'jo_number' => VendorShipmentHelper::joNumber($s),
                     'customer_name' => $s->company?->name,
                     'due_date' => $due?->toDateString(),
                     'remaining_days' => $remaining,
@@ -104,7 +103,6 @@ class DashboardController extends Controller
                 ];
             });
 
-        // Recent Activities (last 10 activities scoped to vendor's job orders/invoices/payments)
         $shipmentIds = Shipment::forVendor($vendorCompanyId)->pluck('shipments.id')->all();
         $invoiceIds = VendorInvoice::where('vendor_company_id', $vendorCompanyId)->pluck('id')->all();
         $recentActivities = CompanyActivity::query()
@@ -122,44 +120,64 @@ class DashboardController extends Controller
             ->map(fn (CompanyActivity $a) => [
                 'id' => $a->id,
                 'event_key' => $a->event_key,
+                'description' => $a->description,
                 'actor_name' => $a->actor?->name,
                 'occurred_at' => $a->occurred_at?->toIso8601String(),
             ]);
 
-        // Pending Documents (job orders completed but invoice not yet created, or progress without evidence)
-        $pendingDocuments = Shipment::forVendor($vendorCompanyId)
-            ->with('vendorInvoice:id,shipment_id,status')
+        $pendingDocuments = collect();
+
+        Shipment::forVendor($vendorCompanyId)
             ->whereIn('vendor_status', [
-                VendorJobStatus::Completed->value,
+                VendorJobStatus::Accepted->value,
+                VendorJobStatus::InProgress->value,
                 VendorJobStatus::WaitingVerification->value,
             ])
+            ->withCount(['progressUpdates as completion_updates_count' => fn ($q) => $q->whereNotNull('completion_remark')])
             ->get()
-            ->filter(function (Shipment $s) {
-                return $s->vendor_status === VendorJobStatus::Completed->value && $s->vendorInvoice === null;
-            })
-            ->take(5)
-            ->map(fn (Shipment $s) => [
-                'id' => $s->id,
-                'jo_number' => 'JO-'.str_pad((string) $s->id, 5, '0', STR_PAD_LEFT),
-                'document_key' => 'vendor_invoice',
-                'status_key' => 'pending_submission',
-                'action_key' => 'create',
-                'action_url' => "/dashboard/vendor/invoices/create?job_order_id={$s->id}",
-            ])
-            ->values();
+            ->filter(fn (Shipment $s) => (int) $s->completion_updates_count === 0)
+            ->take(3)
+            ->each(function (Shipment $s) use ($pendingDocuments) {
+                $pendingDocuments->push([
+                    'id' => $s->id,
+                    'jo_number' => VendorShipmentHelper::joNumber($s),
+                    'document_key' => 'proof_of_completion',
+                    'status_key' => 'pending_upload',
+                    'action_key' => 'upload',
+                    'action_url' => "/dashboard/vendor/job-orders/{$s->id}",
+                ]);
+            });
+
+        Shipment::forVendor($vendorCompanyId)
+            ->where('vendor_status', VendorJobStatus::Completed->value)
+            ->whereDoesntHave('vendorInvoice')
+            ->limit(3)
+            ->get()
+            ->each(function (Shipment $s) use ($pendingDocuments) {
+                $pendingDocuments->push([
+                    'id' => $s->id,
+                    'jo_number' => VendorShipmentHelper::joNumber($s),
+                    'document_key' => 'vendor_invoice',
+                    'status_key' => 'pending_submission',
+                    'action_key' => 'create',
+                    'action_url' => "/dashboard/vendor/invoices?create=1&job_order_id={$s->id}",
+                ]);
+            });
 
         return response()->json([
             'data' => [
                 'stats' => $stats,
                 'quick_actions' => [
-                    'view_pending_jobs' => $stats['pending_acceptance'],
-                    'create_invoice' => $stats['pending_invoice'],
+                    'view_pending_jobs' => $quickActionAccess['view_pending_jobs'] ? $stats['pending_acceptance'] : null,
+                    'create_invoice' => $quickActionAccess['create_invoice'] ? $stats['pending_invoice'] : null,
+                    'my_job_orders' => $quickActionAccess['my_job_orders'],
                 ],
+                'quick_action_access' => $quickActionAccess,
                 'my_job_orders' => $myJobOrders,
                 'performance' => $performance,
                 'upcoming_deadlines' => $upcomingDeadlines,
                 'recent_activities' => $recentActivities,
-                'pending_documents' => $pendingDocuments,
+                'pending_documents' => $pendingDocuments->take(5)->values(),
                 'vendor_company' => $user->company ? [
                     'id' => $user->company->id,
                     'name' => $user->company->name,

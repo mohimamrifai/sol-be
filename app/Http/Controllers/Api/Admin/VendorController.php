@@ -60,7 +60,14 @@ class VendorController extends Controller
         }
 
         if ($request->filled('vendor_type')) {
-            $query->whereJsonContains('vendor_types', $request->vendor_type);
+            if ($request->vendor_type === 'some_both') {
+                $jsonLengthFn = $query->getConnection()->getDriverName() === 'sqlite'
+                    ? 'json_array_length(vendor_types)'
+                    : 'JSON_LENGTH(vendor_types)';
+                $query->whereRaw("{$jsonLengthFn} > 1");
+            } else {
+                $query->whereJsonContains('vendor_types', $request->vendor_type);
+            }
         }
 
         if ($request->filled('status')) {

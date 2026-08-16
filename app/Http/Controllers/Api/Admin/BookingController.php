@@ -670,7 +670,7 @@ class BookingController extends Controller
             'name' => $booking->shipper_name,
             'phone' => $booking->shipper_phone,
             'address' => $booking->shipper_address,
-            'branch_id' => $booking->shipper_branch_id,
+            'branch_id' => $booking->shipper_location_id,
             'snapshot' => $booking->shipper_snapshot,
         ];
     }
@@ -682,7 +682,7 @@ class BookingController extends Controller
             'phone' => $booking->consignee_phone,
             'address' => $booking->consignee_address,
             'type' => $booking->consignee_type,
-            'branch_id' => $booking->consignee_branch_id,
+            'branch_id' => $booking->consignee_location_id,
             'snapshot' => $booking->consignee_snapshot,
         ];
     }

@@ -308,6 +308,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('vendor-job-orders/{vendorJobOrder}/verify-completion', [AdminVendorJobOrderController::class, 'verifyCompletion']);
         Route::post('vendor-job-orders/{vendorJobOrder}/documents', [AdminVendorJobOrderController::class, 'storeDocument']);
         Route::get('vendor-job-orders/{vendorJobOrder}/documents/{document}', [AdminVendorJobOrderController::class, 'downloadDocument']);
+        Route::get('vendor-job-orders/{vendorJobOrder}/pdf', [AdminVendorJobOrderController::class, 'pdf']);
 
         Route::get('vendor-invoices/stats', [AdminVendorInvoiceController::class, 'stats']);
         Route::get('vendor-invoices/eligible-job-orders', [AdminVendorInvoiceController::class, 'eligibleJobOrders']);
@@ -327,6 +328,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('vendor-payments/{vendorPaymentRequest}/approve', [AdminVendorPaymentController::class, 'approve']);
         Route::post('vendor-payments/{vendorPaymentRequest}/reject', [AdminVendorPaymentController::class, 'reject']);
         Route::post('vendor-payments/{vendorPaymentRequest}/record-payment', [AdminVendorPaymentController::class, 'recordPayment']);
+        Route::post('vendor-payments/{vendorPaymentRequest}/documents', [AdminVendorPaymentController::class, 'storeDocument']);
+        Route::get('vendor-payments/{vendorPaymentRequest}/documents/{document}', [AdminVendorPaymentController::class, 'downloadDocument']);
 
         Route::get('reports/vendor-invoices', [AdminVendorReportController::class, 'invoiceIndex']);
         Route::get('reports/vendor-invoices/export', [AdminVendorReportController::class, 'invoiceExport']);
@@ -428,6 +431,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Dashboard (ringkasan untuk halaman Dashboard Customer Portal)
         Route::get('dashboard', [CustomerDashboardController::class, 'index']);
+        Route::get('dashboard/notifications', [CustomerDashboardController::class, 'notifications']);
 
         // Master data (read-only, untuk form booking)
         Route::get('master/locations', [MasterDataReadController::class, 'locations']);
@@ -537,6 +541,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/', [JobOrderController::class, 'index']);
             Route::get('{shipment}', [JobOrderController::class, 'show']);
             Route::post('{shipment}/accept', [JobOrderController::class, 'accept']);
+            Route::post('{shipment}/reject', [JobOrderController::class, 'reject']);
             Route::post('{shipment}/progress', [JobOrderController::class, 'submitProgress']);
             Route::post('{shipment}/submit-completion', [JobOrderController::class, 'submitCompletion']);
             Route::get('{shipment}/activities', [JobOrderController::class, 'activities']);
@@ -545,8 +550,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('documents')->group(function () {
             Route::get('stats', [DocumentController::class, 'stats']);
             Route::get('/', [DocumentController::class, 'index']);
-            Route::get('{attachment}', [DocumentController::class, 'show']);
-            Route::get('{attachment}/download', [DocumentController::class, 'download']);
+            Route::get('{documentId}', [DocumentController::class, 'show']);
+            Route::get('{documentId}/download', [DocumentController::class, 'download']);
         });
 
         Route::prefix('invoices')->group(function () {

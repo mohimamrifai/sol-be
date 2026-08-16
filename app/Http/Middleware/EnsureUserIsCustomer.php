@@ -8,7 +8,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class EnsureUserIsCustomer
 {
-    private const CUSTOMER_ROLES = ['company_admin', 'ops_pic', 'finance_pic'];
+    private const CUSTOMER_ROLES = ['company_admin', 'ops_pic', 'finance_pic', 'viewer'];
 
     public function handle(Request $request, Closure $next): Response
     {

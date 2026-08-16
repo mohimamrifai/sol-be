@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\Vendor;
 use App\Enums\VendorInvoiceStatus;
 use App\Enums\VendorJobStatus;
 use App\Enums\VendorUserRole;
+use App\Http\Controllers\Api\Vendor\Concerns\AuthorizesVendorRoles;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Vendor\VendorInvoiceResource;
 use App\Models\CompanyActivity;
@@ -21,6 +22,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class VendorInvoiceController extends Controller
 {
+    use AuthorizesVendorRoles;
     public function stats(Request $request): JsonResponse
     {
         $vendorCompanyId = $request->user()->company_id;
@@ -58,6 +60,12 @@ class VendorInvoiceController extends Controller
         }
         if ($to = $request->date('to')) {
             $query->whereDate('invoice_date', '<=', $to);
+        }
+        if ($dueFrom = $request->date('due_from')) {
+            $query->whereDate('due_date', '>=', $dueFrom);
+        }
+        if ($dueTo = $request->date('due_to')) {
+            $query->whereDate('due_date', '<=', $dueTo);
         }
 
         $page = $query->orderByDesc('created_at')->paginate(min((int) $request->integer('per_page', 15) ?: 15, 100));
@@ -123,11 +131,11 @@ class VendorInvoiceController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $this->authorizeWriteAccess($request);
+        $this->authorizeInvoiceWrite($request);
 
         $request->validate([
             'shipment_id' => 'required|integer|exists:shipments,id',
-            'invoice_number' => 'nullable|string|max:60|unique:vendor_invoices,invoice_number',
+            'invoice_number' => 'required|string|max:60|unique:vendor_invoices,invoice_number',
             'invoice_date' => 'required|date',
             'due_date' => 'required|date|after_or_equal:invoice_date',
             'invoice_amount' => 'required|numeric|min:0',
@@ -155,7 +163,7 @@ class VendorInvoiceController extends Controller
             $invoice = VendorInvoice::create([
                 'vendor_company_id' => $shipment->vendor_company_id,
                 'shipment_id' => $shipment->id,
-                'invoice_number' => $request->input('invoice_number') ?: VendorInvoice::generateInvoiceNumber(),
+                'invoice_number' => $request->input('invoice_number'),
                 'invoice_date' => $request->date('invoice_date'),
                 'due_date' => $request->date('due_date'),
                 'invoice_amount' => $request->input('invoice_amount'),
@@ -207,7 +215,7 @@ class VendorInvoiceController extends Controller
 
     public function update(Request $request, VendorInvoice $invoice): JsonResponse
     {
-        $this->authorizeWriteAccess($request);
+        $this->authorizeInvoiceWrite($request);
         $this->authorizeVendorAccess($request, $invoice);
         if (! $invoice->isEditable()) {
             return response()->json(['message' => 'Invoice tidak dapat diedit.'], 422);
@@ -256,7 +264,7 @@ class VendorInvoiceController extends Controller
 
     public function submit(Request $request, VendorInvoice $invoice): JsonResponse
     {
-        $this->authorizeWriteAccess($request);
+        $this->authorizeInvoiceWrite($request);
         $this->authorizeVendorAccess($request, $invoice);
         if (! $invoice->isSubmittable()) {
             return response()->json(['message' => 'Invoice belum bisa disubmit. Pastikan file invoice terupload dan status draft/rejected.'], 422);
@@ -311,14 +319,10 @@ class VendorInvoiceController extends Controller
     }
 
     /**
-     * Restrict write actions to Company Admin, Ops PIC, and Finance PIC.
-     * Viewer is read-only per FSD company.md L176.
+     * @deprecated use authorizeInvoiceWrite()
      */
     private function authorizeWriteAccess(Request $request): void
     {
-        $user = $request->user();
-        if ($user->hasRole(VendorUserRole::VendorViewer->value)) {
-            abort(response()->json(['message' => 'Anda tidak memiliki akses untuk aksi ini.'], 403));
-        }
+        $this->authorizeInvoiceWrite($request);
     }
 }

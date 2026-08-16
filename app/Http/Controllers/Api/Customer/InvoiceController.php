@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api\Customer;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
+use App\Models\User;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -14,6 +16,12 @@ use Illuminate\Validation\Rule;
 
 class InvoiceController extends Controller
 {
+    /** @var list<string> */
+    private const ISSUED_DB_STATUSES = ['issued', 'unpaid'];
+
+    /** @var list<string> */
+    private const OPEN_DB_STATUSES = ['issued', 'partially_paid', 'unpaid', 'overdue'];
+
     public function stats(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -25,24 +33,18 @@ class InvoiceController extends Controller
         $paid = (clone $base)->where('status', 'paid')->count();
         $partiallyPaid = (clone $base)
             ->where('status', 'partially_paid')
-            ->where(function ($q) use ($today) {
-                $q->whereNull('due_date')->orWhere('due_date', '>=', $today);
-            })
+            ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today))
             ->count();
         $issued = (clone $base)
-            ->where('status', 'issued')
-            ->where(function ($q) use ($today) {
-                $q->whereNull('due_date')->orWhere('due_date', '>=', $today);
-            })
+            ->whereIn('status', self::ISSUED_DB_STATUSES)
+            ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today))
             ->count();
-        $overdue = (clone $base)
-            ->whereIn('status', ['issued', 'partially_paid'])
+        $overdueQuery = (clone $base)
+            ->whereIn('status', self::OPEN_DB_STATUSES)
             ->whereNotNull('due_date')
-            ->where('due_date', '<', $today)
-            ->whereRaw(
-                "(invoices.total_amount - COALESCE((select sum(payments.amount) from payments where payments.invoice_id = invoices.id and payments.status in ('success','settlement')), 0)) > 0"
-            )
-            ->count();
+            ->where('due_date', '<', $today);
+        $this->applyOutstandingFilter($overdueQuery);
+        $overdue = $overdueQuery->count();
 
         return response()->json([
             'data' => [
@@ -91,9 +93,18 @@ class InvoiceController extends Controller
             $st = $validated['status'];
             if ($st === 'overdue') {
                 $query
-                    ->whereIn('status', ['issued', 'partially_paid'])
+                    ->whereIn('status', self::OPEN_DB_STATUSES)
                     ->whereNotNull('due_date')
                     ->where('due_date', '<', $today);
+                $this->applyOutstandingFilter($query);
+            } elseif ($st === 'issued') {
+                $query
+                    ->whereIn('status', self::ISSUED_DB_STATUSES)
+                    ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today));
+            } elseif ($st === 'partially_paid') {
+                $query
+                    ->where('status', 'partially_paid')
+                    ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today));
             } else {
                 $query->where('status', $st);
             }
@@ -129,12 +140,7 @@ class InvoiceController extends Controller
             $paid = (float) ($inv->paid_amount ?? 0);
             $total = (float) $inv->total_amount;
             $outstanding = max($total - $paid, 0);
-
-            $status = (string) $inv->status;
-            $customerStatus = $status;
-            if (in_array($status, ['issued', 'partially_paid'], true) && $inv->due_date !== null && $inv->due_date->lt($today) && $outstanding > 0) {
-                $customerStatus = 'overdue';
-            }
+            $customerStatus = $this->resolveCustomerStatus((string) $inv->status, $inv->due_date, $outstanding, $today);
 
             return [
                 'id' => $inv->id,
@@ -145,7 +151,7 @@ class InvoiceController extends Controller
                 'paid_amount' => $paid,
                 'outstanding_amount' => $outstanding,
                 'status' => $customerStatus,
-                'base_status' => $status,
+                'base_status' => (string) $inv->status,
                 'shipment' => [
                     'id' => $inv->shipment?->id,
                     'shipment_number' => $inv->shipment?->shipment_number,
@@ -190,7 +196,7 @@ class InvoiceController extends Controller
                 'invoice_id' => $invoice->id,
                 'actor_user_id' => $user->id,
                 'event_key' => 'invoice_viewed',
-                'description' => 'Customer membuka invoice',
+                'description' => 'Customer membuka Invoice',
                 'meta' => [
                     'ip' => $request->ip(),
                     'user_agent' => (string) $request->userAgent(),
@@ -202,12 +208,12 @@ class InvoiceController extends Controller
 
         $paidAmount = $invoice->paidAmount();
         $outstandingAmount = $invoice->outstandingAmount();
-
-        $baseStatus = (string) $invoice->status;
-        $customerStatus = $baseStatus;
-        if (in_array($baseStatus, ['issued', 'partially_paid'], true) && $invoice->due_date !== null && $invoice->due_date->lt($today) && $outstandingAmount > 0) {
-            $customerStatus = 'overdue';
-        }
+        $customerStatus = $this->resolveCustomerStatus(
+            (string) $invoice->status,
+            $invoice->due_date,
+            $outstandingAmount,
+            $today
+        );
 
         $companySnapshot = $invoice->company_snapshot ?? null;
         $shipmentSnapshot = $invoice->shipment_snapshot ?? null;
@@ -235,7 +241,7 @@ class InvoiceController extends Controller
             [
                 'key' => 'tax_invoice',
                 'label' => 'Tax Invoice',
-                'available' => $invoice->status === 'paid',
+                'available' => $customerStatus === 'paid' || $invoice->status === 'paid',
                 'view_path' => '/customer/documents/'.rawurlencode("tinv-{$invoice->id}").'/preview',
                 'download_path' => '/customer/documents/'.rawurlencode("tinv-{$invoice->id}").'/download',
             ],
@@ -283,8 +289,13 @@ class InvoiceController extends Controller
             }
         }
         if ($customerStatus === 'paid') {
+            $lastPayment = $invoice->payments
+                ->filter(fn ($p) => in_array($p->status, ['success', 'settlement'], true))
+                ->sortByDesc(fn ($p) => $p->paid_at ?? $p->created_at)
+                ->first();
+            $paidAt = $lastPayment?->paid_at ?? $lastPayment?->created_at ?? $invoice->updated_at;
             $timeline->push([
-                'occurred_at' => now()->toIso8601String(),
+                'occurred_at' => $paidAt?->toIso8601String(),
                 'activity' => 'Status menjadi Paid',
             ]);
         }
@@ -315,6 +326,8 @@ class InvoiceController extends Controller
                 'payment_terms' => $paymentTerms,
                 'remark' => $invoice->notes,
                 'shipment' => [
+                    'id' => $invoice->shipment?->id,
+                    'booking_id' => $invoice->shipment?->booking_id ?? $invoice->shipment?->booking?->id,
                     'shipment_no' => $shipmentNo,
                     'booking_no' => $bookingNo,
                     'cn_no' => $cnNo,
@@ -329,13 +342,7 @@ class InvoiceController extends Controller
                     'unit_price' => (float) $it->unit_price,
                     'amount' => (float) $it->total_price,
                 ])->values(),
-                'summary' => [
-                    'subtotal' => (float) $invoice->subtotal,
-                    'discount' => 0,
-                    'additional_charge' => 0,
-                    'ppn' => (float) $invoice->tax_amount,
-                    'grand_total' => (float) $invoice->total_amount,
-                ],
+                'summary' => $this->computeSummaryFromItems($invoice),
                 'supporting_documents' => $documents,
                 'payment_summary' => [
                     'invoice_amount' => (float) $invoice->total_amount,
@@ -347,7 +354,7 @@ class InvoiceController extends Controller
                 'activity_timeline' => $timeline,
                 'actions' => [
                     'download_pdf_path' => "/customer/invoices/{$invoice->id}/pdf",
-                    'can_pay_now' => $outstandingAmount > 0 && $invoice->status !== 'draft' && $invoice->status !== 'cancelled',
+                    'can_pay_now' => $this->canUserPayNow($user, $invoice, $outstandingAmount),
                 ],
             ],
         ]);
@@ -367,5 +374,113 @@ class InvoiceController extends Controller
         $pdf = Pdf::loadView('pdf.invoice', ['invoice' => $invoice]);
 
         return $pdf->download('invoice-'.$invoice->invoice_number.'.pdf');
+    }
+
+    private function applyOutstandingFilter(Builder $query): void
+    {
+        $query->whereRaw(
+            "(invoices.total_amount - COALESCE((select sum(payments.amount) from payments where payments.invoice_id = invoices.id and payments.status in ('success','settlement')), 0)) > 0"
+        );
+    }
+
+    private function applyNotOverdueFilter(Builder $query, Carbon $today): void
+    {
+        $query->where(function ($q) use ($today) {
+            $q->whereNull('due_date')->orWhere('due_date', '>=', $today);
+        });
+    }
+
+    private function normalizeBaseStatus(string $status): string
+    {
+        return match ($status) {
+            'unpaid', 'overdue' => 'issued',
+            default => $status,
+        };
+    }
+
+    private function resolveCustomerStatus(
+        string $dbStatus,
+        ?Carbon $dueDate,
+        float $outstanding,
+        Carbon $today,
+    ): string {
+        $normalized = $this->normalizeBaseStatus($dbStatus);
+
+        if (in_array($normalized, ['issued', 'partially_paid'], true)
+            && $dueDate !== null
+            && $dueDate->lt($today)
+            && $outstanding > 0) {
+            return 'overdue';
+        }
+
+        if ($dbStatus === 'paid') {
+            return 'paid';
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return array{subtotal: float, discount: float, additional_charge: float, ppn: float, grand_total: float}
+     */
+    private function computeSummaryFromItems(Invoice $invoice): array
+    {
+        if ($invoice->items->isEmpty()) {
+            return [
+                'subtotal' => (float) $invoice->subtotal,
+                'discount' => 0.0,
+                'additional_charge' => 0.0,
+                'ppn' => (float) $invoice->tax_amount,
+                'grand_total' => (float) $invoice->total_amount,
+            ];
+        }
+
+        $subtotal = 0.0;
+        $discount = 0.0;
+        $additionalCharge = 0.0;
+
+        foreach ($invoice->items as $item) {
+            $amount = (float) $item->total_price;
+            $desc = strtolower((string) $item->description);
+
+            if ($amount < 0 || str_contains($desc, 'discount')) {
+                $discount += abs($amount);
+
+                continue;
+            }
+
+            if (str_contains($desc, 'additional charge') || str_contains($desc, 'additional service')) {
+                $additionalCharge += $amount;
+
+                continue;
+            }
+
+            $subtotal += $amount;
+        }
+
+        return [
+            'subtotal' => round($subtotal, 2),
+            'discount' => round($discount, 2),
+            'additional_charge' => round($additionalCharge, 2),
+            'ppn' => (float) $invoice->tax_amount,
+            'grand_total' => (float) $invoice->total_amount,
+        ];
+    }
+
+    private function canUserPayNow(User $user, Invoice $invoice, float $outstandingAmount): bool
+    {
+        if ($outstandingAmount <= 0) {
+            return false;
+        }
+
+        if (in_array($invoice->status, ['draft', 'cancelled', 'paid'], true)) {
+            return false;
+        }
+
+        if ($user->hasRole('viewer')) {
+            return false;
+        }
+
+        return true;
     }
 }

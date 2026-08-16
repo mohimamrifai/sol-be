@@ -6,6 +6,7 @@ namespace App\Http\Resources\Vendor;
 
 use App\Enums\VendorJobStatus;
 use App\Models\Shipment;
+use App\Support\VendorShipmentHelper;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -22,7 +23,7 @@ class JobOrderResource extends JsonResource
             'id' => $this->id,
             'shipment_no' => $this->shipment_no,
             'shipment_number' => $this->shipment_number,
-            'jo_number' => 'JO-'.str_pad((string) $this->id, 5, '0', STR_PAD_LEFT),
+            'jo_number' => VendorShipmentHelper::joNumber($this->resource),
             'customer' => $this->whenLoaded('company', fn () => [
                 'id' => $this->company->id,
                 'name' => $this->company->name,

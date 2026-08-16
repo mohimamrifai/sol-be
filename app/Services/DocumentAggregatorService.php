@@ -7,6 +7,8 @@ namespace App\Services;
 use App\Enums\DocumentType;
 use App\Models\Booking;
 use App\Models\BookingAttachment;
+use App\Models\BookingContainer;
+use App\Models\BookingPackage;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\Shipment;
@@ -19,6 +21,21 @@ use Illuminate\Support\Collection;
  */
 class DocumentAggregatorService
 {
+    private const MSDS_CONTAINER_ID_OFFSET = 1_000_000_000;
+
+    /** FSD filter values → document_type(s) */
+    private const FILTER_TYPE_MAP = [
+        'booking' => ['booking_attachment', 'msds_file'],
+        'shipment' => ['consignment_note'],
+        'invoice' => ['invoice'],
+        'tax_invoice' => ['tax_invoice'],
+        'pod' => ['proof_of_delivery'],
+        'delivery_order' => ['delivery_order'],
+        'other' => ['other_supporting'],
+        // legacy bucket filters
+        'billing' => ['invoice', 'tax_invoice', 'payment_receipt'],
+    ];
+
     public function __construct(
         private DocumentPdfService $pdf,
     ) {}
@@ -28,13 +45,9 @@ class DocumentAggregatorService
      */
     public function statsForCompany(int $companyId): array
     {
-        $booking = BookingAttachment::query()
-            ->whereIn('booking_id', Booking::query()->where('company_id', $companyId)->select('id'))
-            ->whereIn('category', ['general', 'others'])
-            ->count();
-
-        $shipment = $this->shipmentDocumentCount($companyId);
-        $billing = $this->billingDocumentCount($companyId);
+        $booking = $this->collectBookingDocuments($companyId, [])->count();
+        $shipment = $this->collectShipmentDocuments($companyId, [])->count();
+        $billing = $this->collectBillingDocuments($companyId, [])->count();
 
         return [
             'total' => $booking + $shipment + $billing,
@@ -42,32 +55,6 @@ class DocumentAggregatorService
             'shipment' => $shipment,
             'billing' => $billing,
         ];
-    }
-
-    private function shipmentDocumentCount(int $companyId): int
-    {
-        $cn = Shipment::query()->where('company_id', $companyId)->whereNotNull('waybill_number')->count();
-
-        $doStatuses = ['ready_for_pickup', 'arrived', 'train_arrived', 'unloading', 'container_unloading', 'completed'];
-        $do = Shipment::query()->where('company_id', $companyId)->whereIn('status', $doStatuses)->count();
-
-        $pod = ShipmentTrackingPhoto::query()
-            ->whereHas('tracking.shipment', fn ($q) => $q->where('company_id', $companyId))
-            ->count();
-
-        return $cn + $do + $pod;
-    }
-
-    private function billingDocumentCount(int $companyId): int
-    {
-        $invoice = Invoice::query()->where('company_id', $companyId)->count();
-        $tax = Invoice::query()->where('company_id', $companyId)->where('status', 'paid')->count();
-        $rcp = Payment::query()
-            ->whereHas('invoice', fn ($q) => $q->where('company_id', $companyId))
-            ->where('status', 'success')
-            ->count();
-
-        return $invoice + $tax + $rcp;
     }
 
     /**
@@ -89,7 +76,12 @@ class DocumentAggregatorService
 
         $type = $filters['type'] ?? null;
         if ($type !== null && $type !== '') {
-            $all = $all->filter(fn (array $r) => ($r['bucket'] ?? null) === $type);
+            if (isset(self::FILTER_TYPE_MAP[$type])) {
+                $allowed = self::FILTER_TYPE_MAP[$type];
+                $all = $all->filter(fn (array $r) => in_array($r['document_type'] ?? '', $allowed, true));
+            } else {
+                $all = $all->filter(fn (array $r) => ($r['document_type'] ?? null) === $type);
+            }
         }
 
         $search = trim((string) ($filters['search'] ?? ''));
@@ -166,6 +158,7 @@ class DocumentAggregatorService
             DocumentType::TaxInvoice => $this->taxInvoiceDocument($pk, $companyId),
             DocumentType::PaymentReceipt => $this->paymentReceiptDocument($pk, $companyId),
             DocumentType::OtherSupporting => $this->otherSupportingDocument($pk, $companyId),
+            DocumentType::MsdsFile => $this->msdsDocument($pk, $companyId),
         };
     }
 
@@ -193,18 +186,19 @@ class DocumentAggregatorService
 
     private function collectBookingDocuments(int $companyId, array $filters): Collection
     {
-        $q = BookingAttachment::query()
+        $rows = BookingAttachment::query()
             ->whereIn('booking_id', Booking::query()->where('company_id', $companyId)->select('id'))
-            ->with(['booking:id,booking_number', 'uploader:id,name'])
-            ->orderByDesc('created_at');
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name', 'uploader:id,name'])
+            ->orderByDesc('created_at')
+            ->get();
 
-        $rows = $q->get();
+        $attachments = $rows->map(function (BookingAttachment $a) {
+            $type = $this->attachmentDocumentType($a);
 
-        return $rows->map(function (BookingAttachment $a) {
             return [
-                'id' => DocumentType::BookingAttachment->prefix().'-'.$a->id,
-                'document_type' => DocumentType::BookingAttachment->value,
-                'document_type_label' => 'Booking Attachment',
+                'id' => $type->prefix().'-'.$a->id,
+                'document_type' => $type->value,
+                'document_type_label' => $this->labelFor($type),
                 'name' => $a->original_name,
                 'format' => $this->extension($a->original_name ?? $a->file_path),
                 'mime_type' => $a->mime_type,
@@ -217,15 +211,109 @@ class DocumentAggregatorService
                 'booking_id' => $a->booking_id,
                 'booking_no' => $a->booking?->booking_number,
                 'cn_no' => null,
-                'bucket' => DocumentType::BookingAttachment->bucket(),
+                'bucket' => $type->bucket(),
                 'available' => true,
                 'source' => [
-                    'kind' => 'booking_attachment',
+                    'kind' => $type === DocumentType::OtherSupporting ? 'other_supporting' : 'booking_attachment',
                     'id' => $a->id,
                     'file_path' => $a->file_path,
                 ],
             ];
         });
+
+        return $attachments->concat($this->collectMsdsDocuments($companyId));
+    }
+
+    private function collectMsdsDocuments(int $companyId): Collection
+    {
+        $out = collect();
+        $bookingIds = Booking::query()->where('company_id', $companyId)->pluck('id');
+
+        $packages = BookingPackage::query()
+            ->whereIn('booking_id', $bookingIds)
+            ->whereNotNull('msds_file_path')
+            ->where('msds_file_path', '!=', '')
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name'])
+            ->orderByDesc('updated_at')
+            ->get();
+
+        foreach ($packages as $p) {
+            $name = 'MSDS/SDS — '.($p->description ?: 'Package #'.$p->sequence);
+            $out->push([
+                'id' => DocumentType::MsdsFile->prefix().'-'.$p->id,
+                'document_type' => DocumentType::MsdsFile->value,
+                'document_type_label' => $this->labelFor(DocumentType::MsdsFile),
+                'name' => $name,
+                'format' => $this->extension($p->msds_file_path) ?? 'pdf',
+                'mime_type' => 'application/pdf',
+                'preview_supported' => $this->isPreviewSupported($p->msds_file_path),
+                'upload_date' => optional($p->updated_at ?? $p->created_at)->toIso8601String(),
+                'uploaded_by' => 'Customer',
+                'shipment_id' => null,
+                'shipment_no' => null,
+                'shipment_number' => null,
+                'booking_id' => $p->booking_id,
+                'booking_no' => $p->booking?->booking_number,
+                'cn_no' => null,
+                'bucket' => DocumentType::MsdsFile->bucket(),
+                'available' => true,
+                'source' => [
+                    'kind' => 'msds_file',
+                    'entity' => 'package',
+                    'id' => $p->id,
+                    'file_path' => $p->msds_file_path,
+                ],
+            ]);
+        }
+
+        $containers = BookingContainer::query()
+            ->whereIn('booking_id', $bookingIds)
+            ->whereNotNull('msds_file_path')
+            ->where('msds_file_path', '!=', '')
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name'])
+            ->orderByDesc('updated_at')
+            ->get();
+
+        foreach ($containers as $c) {
+            $name = 'MSDS/SDS — '.($c->cargo_description ?: 'Container #'.$c->sequence);
+            $virtualId = self::MSDS_CONTAINER_ID_OFFSET + $c->id;
+            $out->push([
+                'id' => DocumentType::MsdsFile->prefix().'-'.$virtualId,
+                'document_type' => DocumentType::MsdsFile->value,
+                'document_type_label' => $this->labelFor(DocumentType::MsdsFile),
+                'name' => $name,
+                'format' => $this->extension($c->msds_file_path) ?? 'pdf',
+                'mime_type' => 'application/pdf',
+                'preview_supported' => $this->isPreviewSupported($c->msds_file_path),
+                'upload_date' => optional($c->updated_at ?? $c->created_at)->toIso8601String(),
+                'uploaded_by' => 'Customer',
+                'shipment_id' => null,
+                'shipment_no' => null,
+                'shipment_number' => null,
+                'booking_id' => $c->booking_id,
+                'booking_no' => $c->booking?->booking_number,
+                'cn_no' => null,
+                'bucket' => DocumentType::MsdsFile->bucket(),
+                'available' => true,
+                'source' => [
+                    'kind' => 'msds_file',
+                    'entity' => 'container',
+                    'id' => $c->id,
+                    'file_path' => $c->msds_file_path,
+                ],
+            ]);
+        }
+
+        return $out;
+    }
+
+    private function attachmentDocumentType(BookingAttachment $a): DocumentType
+    {
+        $cat = strtolower(trim((string) ($a->category ?? 'general')));
+
+        return in_array($cat, ['others', 'other', 'internal'], true)
+            ? DocumentType::OtherSupporting
+            : DocumentType::BookingAttachment;
     }
 
     private function collectShipmentDocuments(int $companyId, array $filters): Collection
@@ -362,15 +450,17 @@ class DocumentAggregatorService
     {
         $a = BookingAttachment::query()
             ->whereIn('booking_id', Booking::query()->where('company_id', $companyId)->select('id'))
-            ->with(['booking:id,booking_number,company_id', 'uploader:id,name'])
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name', 'uploader:id,name'])
             ->find($id);
 
         if (! $a) {
             return null;
         }
 
+        $type = $this->attachmentDocumentType($a);
+
         return $this->shape(
-            DocumentType::BookingAttachment,
+            $type,
             $a->original_name,
             optional($a->created_at)->toIso8601String(),
             $a->uploader?->name ?? '—',
@@ -384,7 +474,7 @@ class DocumentAggregatorService
             $this->isPreviewSupported($a->original_name ?? $a->file_path),
             [
                 'document_name' => $a->original_name,
-                'document_type' => 'Booking Attachment',
+                'document_type' => $this->labelFor($type),
                 'booking_no' => $a->booking?->booking_number,
                 'shipment_no' => null,
                 'customer' => $a->booking?->company?->name ?? null,
@@ -392,9 +482,13 @@ class DocumentAggregatorService
                 'upload_date' => optional($a->created_at)->toIso8601String(),
                 'remarks' => $a->remarks,
             ],
-            ['kind' => 'booking_attachment', 'id' => $a->id, 'file_path' => $a->file_path],
-            $a->shipment_id ?? null,
-            $a->shipment?->shipment_number ?? null,
+            [
+                'kind' => $type === DocumentType::OtherSupporting ? 'other_supporting' : 'booking_attachment',
+                'id' => $a->id,
+                'file_path' => $a->file_path,
+            ],
+            null,
+            null,
         );
     }
 
@@ -602,7 +696,112 @@ class DocumentAggregatorService
 
     private function otherSupportingDocument(int $attachmentId, int $companyId): ?array
     {
+        $a = BookingAttachment::query()
+            ->whereIn('booking_id', Booking::query()->where('company_id', $companyId)->select('id'))
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name', 'uploader:id,name'])
+            ->find($attachmentId);
+
+        if (! $a || $this->attachmentDocumentType($a) !== DocumentType::OtherSupporting) {
+            return null;
+        }
+
         return $this->bookingAttachmentDocument($attachmentId, $companyId);
+    }
+
+    private function msdsDocument(int $virtualId, int $companyId): ?array
+    {
+        if ($virtualId >= self::MSDS_CONTAINER_ID_OFFSET) {
+            $containerId = $virtualId - self::MSDS_CONTAINER_ID_OFFSET;
+            $c = BookingContainer::query()
+                ->whereNotNull('msds_file_path')
+                ->whereHas('booking', fn ($q) => $q->where('company_id', $companyId))
+                ->with(['booking:id,booking_number,company_id', 'booking.company:id,name'])
+                ->find($containerId);
+
+            if (! $c || empty($c->msds_file_path)) {
+                return null;
+            }
+
+            $name = 'MSDS/SDS — '.($c->cargo_description ?: 'Container #'.$c->sequence);
+
+            return $this->shape(
+                DocumentType::MsdsFile,
+                $name,
+                optional($c->updated_at ?? $c->created_at)->toIso8601String(),
+                'Customer',
+                null,
+                null,
+                $c->booking_id,
+                $c->booking?->booking_number,
+                null,
+                $this->extension($c->msds_file_path) ?? 'pdf',
+                'application/pdf',
+                $this->isPreviewSupported($c->msds_file_path),
+                [
+                    'document_name' => $name,
+                    'document_type' => 'Booking Attachment',
+                    'booking_no' => $c->booking?->booking_number,
+                    'shipment_no' => null,
+                    'customer' => $c->booking?->company?->name ?? null,
+                    'uploaded_by' => 'Customer',
+                    'upload_date' => optional($c->updated_at ?? $c->created_at)->toIso8601String(),
+                    'remarks' => 'MSDS/SDS per container.',
+                ],
+                [
+                    'kind' => 'msds_file',
+                    'entity' => 'container',
+                    'id' => $c->id,
+                    'file_path' => $c->msds_file_path,
+                ],
+                null,
+                null,
+            );
+        }
+
+        $p = BookingPackage::query()
+            ->whereNotNull('msds_file_path')
+            ->whereHas('booking', fn ($q) => $q->where('company_id', $companyId))
+            ->with(['booking:id,booking_number,company_id', 'booking.company:id,name'])
+            ->find($virtualId);
+
+        if (! $p || empty($p->msds_file_path)) {
+            return null;
+        }
+
+        $name = 'MSDS/SDS — '.($p->description ?: 'Package #'.$p->sequence);
+
+        return $this->shape(
+            DocumentType::MsdsFile,
+            $name,
+            optional($p->updated_at ?? $p->created_at)->toIso8601String(),
+            'Customer',
+            null,
+            null,
+            $p->booking_id,
+            $p->booking?->booking_number,
+            null,
+            $this->extension($p->msds_file_path) ?? 'pdf',
+            'application/pdf',
+            $this->isPreviewSupported($p->msds_file_path),
+            [
+                'document_name' => $name,
+                'document_type' => 'Booking Attachment',
+                'booking_no' => $p->booking?->booking_number,
+                'shipment_no' => null,
+                'customer' => $p->booking?->company?->name ?? null,
+                'uploaded_by' => 'Customer',
+                'upload_date' => optional($p->updated_at ?? $p->created_at)->toIso8601String(),
+                'remarks' => 'MSDS/SDS per package.',
+            ],
+            [
+                'kind' => 'msds_file',
+                'entity' => 'package',
+                'id' => $p->id,
+                'file_path' => $p->msds_file_path,
+            ],
+            null,
+            null,
+        );
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -736,6 +935,7 @@ class DocumentAggregatorService
             DocumentType::TaxInvoice => 'Tax Invoice',
             DocumentType::PaymentReceipt => 'Payment Receipt',
             DocumentType::OtherSupporting => 'Other Supporting Document',
+            DocumentType::MsdsFile => 'MSDS / SDS',
         };
     }
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\User;
+use App\Services\CustomerRegistrationMailer;
 use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,6 +14,8 @@ use Illuminate\Validation\Rule;
 
 class CompanyController extends Controller
 {
+    public function __construct(private CustomerRegistrationMailer $registrationMailer) {}
+
     public function index(Request $request): JsonResponse
     {
         $query = Company::query()
@@ -202,7 +205,15 @@ class CompanyController extends Controller
             'reason' => 'required|string|max:500',
         ]);
 
-        $company->update(['status' => 'rejected']);
+        $now = now();
+        $reviewerId = auth()->id();
+
+        $company->update([
+            'status' => 'rejected',
+            'rejection_reason' => $validated['reason'],
+            'reviewed_at' => $company->reviewed_at ?? $now,
+            'reviewed_by' => $company->reviewed_by ?? $reviewerId,
+        ]);
 
         $users = User::where('company_id', $company->id)->get();
 
@@ -211,6 +222,11 @@ class CompanyController extends Controller
                 $user->update(['status' => 'inactive']);
             }
             $user->tokens()->delete();
+        }
+
+        $adminUser = $users->first(fn (User $u) => $u->hasRole('company_admin')) ?? $users->first();
+        if ($adminUser) {
+            $this->registrationMailer->sendRejected($company, $adminUser, $validated['reason']);
         }
 
         return response()->json([
@@ -278,6 +294,7 @@ class CompanyController extends Controller
             'sales_pic_id' => 'nullable|exists:users,id',
             'account_manager_id' => 'nullable|exists:users,id',
             'review_notes' => 'nullable|string|max:5000',
+            'rejection_reason' => 'nullable|string|max:500',
             'pic_name' => 'nullable|string|max:255',
             'pic_email' => 'nullable|email|max:255|'.Rule::unique('users', 'email'),
             'pic_phone' => 'nullable|string|max:20',

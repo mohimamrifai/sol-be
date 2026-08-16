@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Vendor;
 
 use App\Enums\VendorJobStatus;
+use App\Http\Controllers\Api\Vendor\Concerns\AuthorizesVendorRoles;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Vendor\JobOrderResource;
 use App\Models\CompanyActivity;
+use App\Models\OperationTask;
 use App\Models\Shipment;
+use App\Models\VendorJobOrderDocument;
 use App\Models\VendorProgressAttachment;
 use App\Models\VendorProgressUpdate;
 use App\Services\VendorJobOrderService;
+use App\Support\VendorShipmentHelper;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +23,8 @@ use Illuminate\Support\Facades\Storage;
 
 class JobOrderController extends Controller
 {
+    use AuthorizesVendorRoles;
+
     public function __construct(private readonly VendorJobOrderService $vendorJobOrderService) {}
 
     public function stats(Request $request): JsonResponse
@@ -58,11 +64,13 @@ class JobOrderController extends Controller
             $query->where('service_type_id', $serviceTypeId);
         }
 
-        if ($from = $request->date('from')) {
-            $query->whereDate('created_at', '>=', $from);
+        $assignedFrom = $request->date('assigned_from') ?? $request->date('from');
+        $assignedTo = $request->date('assigned_to') ?? $request->date('to');
+        if ($assignedFrom) {
+            $query->whereDate('created_at', '>=', $assignedFrom);
         }
-        if ($to = $request->date('to')) {
-            $query->whereDate('created_at', '<=', $to);
+        if ($assignedTo) {
+            $query->whereDate('created_at', '<=', $assignedTo);
         }
 
         $sort = $request->string('sort')->toString() ?: 'created_at';
@@ -93,11 +101,16 @@ class JobOrderController extends Controller
             'transportMode:id,code,name',
             'originLocation:id,code,name,city,province',
             'destinationLocation:id,code,name,city,province',
-            'items',
+            'originYard:id,code,name',
+            'destinationYard:id,code,name',
+            'internalPic:id,name',
+            'items.container',
+            'containers',
+            'adminVendorJobOrders.documents.uploadedBy:id,name',
+            'operationTasks',
             'progressUpdates' => function ($q) {
                 $q->with(['submittedByUser:id,name', 'attachments'])->orderByDesc('submitted_at');
             },
-            'progressUpdates.attachments',
         ]);
 
         $activities = CompanyActivity::query()
@@ -114,6 +127,23 @@ class JobOrderController extends Controller
                 'occurred_at' => $a->occurred_at?->toIso8601String(),
             ]);
 
+        $vendorJo = $shipment->adminVendorJobOrders->first();
+
+        $internalDocs = $shipment->adminVendorJobOrders
+            ->flatMap(fn ($vjo) => $vjo->documents)
+            ->map(fn ($a) => [
+                'id' => $a->id,
+                'name' => $a->original_name,
+                'document_type' => $a->document_type,
+                'mime_type' => $a->mime_type,
+                'size' => (int) $a->size,
+                'file_url' => Storage::url($a->file_path),
+                'uploaded_by' => $a->uploadedBy?->name ?? 'Internal',
+                'uploaded_at' => $a->created_at?->toIso8601String(),
+            ])
+            ->values()
+            ->all();
+
         $supportingDocs = VendorProgressAttachment::query()
             ->whereHas('progressUpdate', fn ($q) => $q->where('shipment_id', $shipment->id))
             ->with('progressUpdate.submittedByUser:id,name')
@@ -129,34 +159,86 @@ class JobOrderController extends Controller
                 'uploaded_at' => $a->created_at?->toIso8601String(),
             ]);
 
-        // Build timeline from key dates
-        $timeline = collect([
-            [
-                'event' => 'assigned',
-                'description' => 'Job order ditugaskan ke vendor.',
-                'occurred_at' => $shipment->created_at?->toIso8601String(),
-            ],
-            $shipment->accepted_at ? [
-                'event' => 'accepted',
-                'description' => 'Job order diterima vendor.',
-                'occurred_at' => $shipment->accepted_at->toIso8601String(),
-            ] : null,
-            $shipment->completion_submitted_at ? [
-                'event' => 'completion_submitted',
-                'description' => 'Vendor mengajukan penyelesaian job order.',
-                'occurred_at' => $shipment->completion_submitted_at->toIso8601String(),
-            ] : null,
-            $shipment->completion_verified_at ? [
-                'event' => 'completion_verified',
-                'description' => 'Internal memverifikasi penyelesaian job order.',
-                'occurred_at' => $shipment->completion_verified_at->toIso8601String(),
-            ] : null,
-        ])->filter()->values()->all();
+        // Build timeline from operation tasks + key dates
+        $timeline = $shipment->operationTasks
+            ->sortBy('actual_at')
+            ->map(fn (OperationTask $t) => [
+                'event' => $t->operation_type?->value ?? 'operation',
+                'activity' => $t->operation_type?->label() ?? 'Operation',
+                'description' => $t->operation_type?->label() ?? 'Operation update',
+                'status' => $t->status?->value ?? 'pending',
+                'status_label' => $t->status?->label() ?? 'Pending',
+                'updated_by' => 'Internal',
+                'occurred_at' => ($t->actual_at ?? $t->planned_date)?->toIso8601String(),
+            ])
+            ->values()
+            ->all();
+
+        if (empty($timeline)) {
+            $timeline = collect([
+                [
+                    'event' => 'assigned',
+                    'activity' => 'Job Order Assigned',
+                    'description' => 'Job order ditugaskan ke vendor.',
+                    'status' => 'completed',
+                    'status_label' => 'Completed',
+                    'updated_by' => 'Internal',
+                    'occurred_at' => $shipment->created_at?->toIso8601String(),
+                ],
+                $shipment->accepted_at ? [
+                    'event' => 'accepted',
+                    'activity' => 'Job Accepted',
+                    'description' => 'Job order diterima vendor.',
+                    'status' => 'completed',
+                    'status_label' => 'Completed',
+                    'updated_by' => 'Vendor',
+                    'occurred_at' => $shipment->accepted_at->toIso8601String(),
+                ] : null,
+                $shipment->completion_submitted_at ? [
+                    'event' => 'completion_submitted',
+                    'activity' => 'Completion Submitted',
+                    'description' => 'Vendor mengajukan penyelesaian job order.',
+                    'status' => 'completed',
+                    'status_label' => 'Completed',
+                    'updated_by' => 'Vendor',
+                    'occurred_at' => $shipment->completion_submitted_at->toIso8601String(),
+                ] : null,
+                $shipment->completion_verified_at ? [
+                    'event' => 'completion_verified',
+                    'activity' => 'Completion Verified',
+                    'description' => 'Internal memverifikasi penyelesaian job order.',
+                    'status' => 'completed',
+                    'status_label' => 'Completed',
+                    'updated_by' => 'Internal',
+                    'occurred_at' => $shipment->completion_verified_at->toIso8601String(),
+                ] : null,
+            ])->filter()->values()->all();
+        }
+
+        $jobDetails = [
+            'containers' => $shipment->containers->map(fn ($c) => [
+                'container_no' => $c->container_number ?? $c->number ?? null,
+                'container_type' => $c->container_type ?? $c->type ?? null,
+            ])->all(),
+            'cargo_description' => $shipment->items->pluck('description')->filter()->implode('; ') ?: $shipment->items->pluck('name')->filter()->implode('; '),
+            'pickup_location' => $vendorJo?->pickup_address ?? $shipment->originLocation?->name,
+            'delivery_location' => $vendorJo?->delivery_address ?? $shipment->destinationLocation?->name,
+            'special_instruction' => $vendorJo?->pickup_remark ?? $vendorJo?->delivery_remark ?? $shipment->planning_notes ?? $shipment->notes,
+            'vehicle_type' => $vendorJo?->vehicle_type,
+            'vehicle_plate' => $vendorJo?->vehicle_plate,
+            'driver_name' => $vendorJo?->driver_name,
+        ];
 
         return response()->json([
             'data' => array_merge(
                 (new JobOrderResource($shipment))->resolve($request),
                 [
+                    'priority' => 'Normal',
+                    'assigned_by' => $shipment->internalPic?->name,
+                    'job_description' => $shipment->planning_notes ?? $shipment->notes,
+                    'work_location' => $shipment->originYard?->name ?? $shipment->destinationYard?->name ?? $shipment->originLocation?->name,
+                    'job_details' => $jobDetails,
+                    'internal_documents' => $internalDocs,
                     'progress_updates' => $shipment->progressUpdates->map(fn ($u) => [
                         'id' => $u->id,
                         'progress_notes' => $u->progress_notes,
@@ -182,6 +264,7 @@ class JobOrderController extends Controller
 
     public function accept(Request $request, Shipment $shipment): JsonResponse
     {
+        $this->authorizeJobOrderWrite($request);
         $this->authorizeVendorAccess($request, $shipment);
 
         if ($shipment->vendor_status !== VendorJobStatus::PendingAcceptance->value) {
@@ -215,8 +298,49 @@ class JobOrderController extends Controller
         ]);
     }
 
+    public function reject(Request $request, Shipment $shipment): JsonResponse
+    {
+        $this->authorizeJobOrderWrite($request);
+        $this->authorizeVendorAccess($request, $shipment);
+
+        if ($shipment->vendor_status !== VendorJobStatus::PendingAcceptance->value) {
+            return response()->json(['message' => 'Job order tidak dalam status Pending Acceptance.'], 422);
+        }
+
+        $request->validate([
+            'rejection_reason' => 'nullable|string|max:2000',
+        ]);
+
+        $shipment = DB::transaction(function () use ($shipment, $request) {
+            $shipment->update([
+                'vendor_status' => VendorJobStatus::Rejected->value,
+                'vendor_rejection_reason' => $request->input('rejection_reason'),
+            ]);
+
+            CompanyActivity::create([
+                'subject_type' => Shipment::class,
+                'subject_id' => $shipment->id,
+                'event_key' => 'vendor_job_rejected',
+                'description' => 'Job order ditolak oleh vendor.',
+                'meta' => ['reason' => $request->input('rejection_reason')],
+                'actor_user_id' => $request->user()->id,
+                'occurred_at' => now(),
+            ]);
+
+            return $shipment->fresh();
+        });
+
+        $this->vendorJobOrderService->syncStatusFromShipment($shipment, $request->user()?->id);
+
+        return response()->json([
+            'message' => 'Job order berhasil ditolak.',
+            'data' => (new JobOrderResource($shipment))->resolve($request),
+        ]);
+    }
+
     public function submitProgress(Request $request, Shipment $shipment): JsonResponse
     {
+        $this->authorizeJobOrderWrite($request);
         $this->authorizeVendorAccess($request, $shipment);
 
         if (! in_array($shipment->vendor_status, [
@@ -227,10 +351,14 @@ class JobOrderController extends Controller
         }
 
         $request->validate([
-            'progress_notes' => 'required|string|max:2000',
+            'progress_notes' => 'nullable|string|max:2000',
             'attachments' => 'nullable|array',
             'attachments.*' => 'file|mimes:jpg,jpeg,png,pdf|max:10240',
         ]);
+
+        if (! $request->input('progress_notes') && ! $request->hasFile('attachments')) {
+            return response()->json(['message' => 'Progress notes atau evidence wajib diisi.'], 422);
+        }
 
         $update = DB::transaction(function () use ($request, $shipment) {
             $update = VendorProgressUpdate::create([
@@ -281,10 +409,10 @@ class JobOrderController extends Controller
 
     public function submitCompletion(Request $request, Shipment $shipment): JsonResponse
     {
+        $this->authorizeJobOrderWrite($request);
         $this->authorizeVendorAccess($request, $shipment);
 
         if (! in_array($shipment->vendor_status, [
-            VendorJobStatus::Accepted->value,
             VendorJobStatus::InProgress->value,
         ], true)) {
             return response()->json(['message' => 'Job order tidak dapat diselesaikan saat ini.'], 422);

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Customer;
 
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
+use App\Models\BookingActivity;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\Shipment;
@@ -19,11 +20,14 @@ class DashboardController extends Controller
     /** Maximum items shown in the recent-notifications timeline. */
     private const DASHBOARD_NOTIFICATION_LIMIT = 5;
 
+    /** Maximum notifications fetched for the full notifications list. */
+    private const NOTIFICATIONS_LIST_MAX = 100;
+
     /** Shipment statuses that count as "completed" for active-scope filter. */
     private const COMPLETED_SHIPMENT_STATUSES = ['completed', 'cancelled'];
 
-    /** Invoice statuses that count as "unpaid" (issued + partially paid). */
-    private const UNPAID_INVOICE_STATUSES = ['issued', 'partially_paid'];
+    /** Invoice statuses that count as "unpaid" (issued + partially paid, incl. legacy labels). */
+    private const UNPAID_INVOICE_STATUSES = ['issued', 'partially_paid', 'unpaid', 'overdue'];
 
     /**
      * Aggregated payload for the customer dashboard.
@@ -46,7 +50,46 @@ class DashboardController extends Controller
             'data' => [
                 'cards' => $this->buildCards($companyId),
                 'recent' => $this->buildRecentLists($companyId),
-                'notifications' => $this->buildNotifications($companyId),
+                'notifications' => $this->buildNotifications($companyId, self::DASHBOARD_NOTIFICATION_LIMIT),
+            ],
+        ]);
+    }
+
+    /**
+     * Paginated activity notifications for the customer notifications page.
+     */
+    public function notifications(Request $request): JsonResponse
+    {
+        $companyId = $request->user()->company_id;
+
+        if (! $companyId) {
+            return response()->json([
+                'data' => [],
+                'meta' => [
+                    'current_page' => 1,
+                    'per_page' => 15,
+                    'total' => 0,
+                    'last_page' => 1,
+                ],
+            ]);
+        }
+
+        $perPage = min(max((int) ($request->per_page ?? 15), 1), 50);
+        $page = max((int) ($request->page ?? 1), 1);
+
+        $all = $this->buildNotifications($companyId, self::NOTIFICATIONS_LIST_MAX);
+        $total = count($all);
+        $lastPage = max(1, (int) ceil($total / $perPage));
+        $page = min($page, $lastPage);
+        $offset = ($page - 1) * $perPage;
+
+        return response()->json([
+            'data' => array_slice($all, $offset, $perPage),
+            'meta' => [
+                'current_page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'last_page' => $lastPage,
             ],
         ]);
     }
@@ -164,38 +207,46 @@ class DashboardController extends Controller
     }
 
     // ── Notifications (derived from activity across 4 sources) ───────────
-    private function buildNotifications(int $companyId): array
+    private function buildNotifications(int $companyId, int $limit): array
     {
-        $limit = self::DASHBOARD_NOTIFICATION_LIMIT;
+        $fetchLimit = max($limit * 4, $limit);
 
-        $bookingEvents = Booking::where('company_id', $companyId)
-            ->orderByDesc('created_at')
-            ->limit($limit * 2)
-            ->get(['id', 'booking_number', 'created_at', 'approved_at'])
-            ->flatMap(function (Booking $b) {
-                $events = [];
-                $events[] = [
-                    'id' => "bk_created_{$b->id}",
+        $bookingSubmitEvents = BookingActivity::query()
+            ->where('activity_type', 'submitted')
+            ->whereHas('booking', fn ($q) => $q->where('company_id', $companyId))
+            ->with('booking:id,booking_number,company_id')
+            ->orderByDesc('occurred_at')
+            ->limit($fetchLimit)
+            ->get()
+            ->map(function (BookingActivity $activity) {
+                $booking = $activity->booking;
+
+                return [
+                    'id' => "bk_submitted_{$activity->id}",
                     'type' => 'booking_submitted',
+                    'ref_id' => $booking?->id,
+                    'ref_type' => 'booking',
+                    'ref_number' => $booking?->booking_number,
+                    'occurred_at' => optional($activity->occurred_at)->toIso8601String(),
+                    'link' => $booking ? "/dashboard/booking/{$booking->id}" : '/dashboard/booking',
+                ];
+            });
+
+        $bookingApprovedEvents = Booking::where('company_id', $companyId)
+            ->whereNotNull('approved_at')
+            ->orderByDesc('approved_at')
+            ->limit($fetchLimit)
+            ->get(['id', 'booking_number', 'approved_at'])
+            ->map(function (Booking $b) {
+                return [
+                    'id' => "bk_approved_{$b->id}",
+                    'type' => 'booking_approved',
                     'ref_id' => $b->id,
                     'ref_type' => 'booking',
                     'ref_number' => $b->booking_number,
-                    'occurred_at' => optional($b->created_at)->toIso8601String(),
-                    'link' => "/dashboard/bookings/{$b->id}",
+                    'occurred_at' => $b->approved_at->toIso8601String(),
+                    'link' => "/dashboard/booking/{$b->id}",
                 ];
-                if ($b->approved_at) {
-                    $events[] = [
-                        'id' => "bk_approved_{$b->id}",
-                        'type' => 'booking_approved',
-                        'ref_id' => $b->id,
-                        'ref_type' => 'booking',
-                        'ref_number' => $b->booking_number,
-                        'occurred_at' => $b->approved_at->toIso8601String(),
-                        'link' => "/dashboard/bookings/{$b->id}",
-                    ];
-                }
-
-                return $events;
             });
 
         $shipmentEvents = Shipment::with(['destinationLocation:id,name'])
@@ -272,7 +323,8 @@ class DashboardController extends Controller
             });
 
         return collect()
-            ->merge($bookingEvents)
+            ->merge($bookingSubmitEvents)
+            ->merge($bookingApprovedEvents)
             ->merge($shipmentEvents)
             ->merge($invoiceEvents)
             ->merge($paymentEvents)

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\DocumentType;
 use App\Models\Shipment;
 
 /**
@@ -15,10 +16,8 @@ class ShipmentViewService
 {
     public function documents(Shipment $shipment): array
     {
-        $hl = $shipment->high_level_status;
         $raw = strtolower((string) $shipment->status);
-
-        $consignmentNote = $this->doc('consignment_note', 'Consignment Note (CN)', true, $shipment->waybill_number !== null);
+        $cnAvailable = $shipment->waybill_number !== null;
 
         $podAvailable = in_array($raw, ['completed', 'ready_for_pickup'], true);
         $deliveryOrderAvailable = in_array($raw, ['ready_for_pickup', 'arrived', 'train_arrived', 'unloading', 'container_unloading', 'completed'], true);
@@ -27,13 +26,17 @@ class ShipmentViewService
         $invoiceAvailable = $invoice !== null;
         $taxInvoiceAvailable = $invoiceAvailable && strtolower((string) $invoice->status) === 'paid';
 
-        $otherDocs = $shipment->trackings
+        $podPhoto = $shipment->trackings
+            ->flatMap(fn ($t) => $t->photos ?? collect())
+            ->first();
+
+        $trackingPhotos = $shipment->trackings
             ->flatMap(fn ($t) => $t->photos ?? collect())
             ->map(fn ($p) => [
                 'id' => $p->id,
-                'name' => $p->name ?? basename((string) $p->path),
+                'name' => $p->caption ?? basename((string) $p->path),
                 'path' => $p->path,
-                'url' => method_exists($p, 'getAttribute') ? $p->getAttribute('url') : null,
+                'document_id' => DocumentType::ProofOfDelivery->prefix().'-'.$p->id,
             ])
             ->values()
             ->all();
@@ -46,27 +49,85 @@ class ShipmentViewService
                 'category' => $a->category,
                 'document_type' => $a->document_type,
                 'remarks' => $a->remarks,
+                'document_id' => DocumentType::BookingAttachment->prefix().'-'.$a->id,
             ])->all()
             : [];
 
+        $otherItems = array_merge($trackingPhotos, $bookingAttachments);
+
         return [
-            $consignmentNote,
-            $this->doc('pod', 'Proof of Delivery (POD)', $podAvailable),
-            $this->doc('delivery_order', 'Delivery Order', $deliveryOrderAvailable),
-            $this->doc('invoice', 'Invoice', $invoiceAvailable, true, $invoice?->id),
-            $this->doc('tax_invoice', 'Tax Invoice', $taxInvoiceAvailable, true, $invoice?->id),
-            $this->doc('other', 'Other Supporting Documents', count($otherDocs) > 0 || count($bookingAttachments) > 0, true, null, array_merge($otherDocs, $bookingAttachments)),
+            $this->doc(
+                'consignment_note',
+                'Consignment Note (CN)',
+                $cnAvailable,
+                true,
+                $shipment->id,
+                [],
+                $cnAvailable ? DocumentType::ConsignmentNote->prefix().'-'.$shipment->id : null,
+            ),
+            $this->doc(
+                'pod',
+                'Proof of Delivery (POD)',
+                $podAvailable && $podPhoto !== null,
+                true,
+                $podPhoto?->id,
+                [],
+                $podPhoto ? DocumentType::ProofOfDelivery->prefix().'-'.$podPhoto->id : null,
+            ),
+            $this->doc(
+                'delivery_order',
+                'Delivery Order',
+                $deliveryOrderAvailable,
+                true,
+                $shipment->id,
+                [],
+                $deliveryOrderAvailable ? DocumentType::DeliveryOrder->prefix().'-'.$shipment->id : null,
+            ),
+            $this->doc(
+                'invoice',
+                'Invoice',
+                $invoiceAvailable,
+                true,
+                $invoice?->id,
+                [],
+                $invoiceAvailable ? DocumentType::Invoice->prefix().'-'.$invoice->id : null,
+            ),
+            $this->doc(
+                'tax_invoice',
+                'Tax Invoice',
+                $taxInvoiceAvailable,
+                true,
+                $invoice?->id,
+                [],
+                $taxInvoiceAvailable ? DocumentType::TaxInvoice->prefix().'-'.$invoice->id : null,
+            ),
+            $this->doc(
+                'other',
+                'Other Supporting Documents',
+                count($otherItems) > 0,
+                true,
+                null,
+                $otherItems,
+            ),
         ];
     }
 
-    private function doc(string $key, string $label, bool $available, bool $hasEndpoint = true, ?int $refId = null, array $items = []): array
-    {
+    private function doc(
+        string $key,
+        string $label,
+        bool $available,
+        bool $hasEndpoint = true,
+        ?int $refId = null,
+        array $items = [],
+        ?string $documentId = null,
+    ): array {
         return [
             'key' => $key,
             'label' => $label,
             'available' => $available,
             'has_endpoint' => $hasEndpoint,
             'reference_id' => $refId,
+            'document_id' => $documentId,
             'items' => $items,
         ];
     }
@@ -82,7 +143,7 @@ class ShipmentViewService
         $isFcl = $serviceCode === 'FCL' || $serviceCode === 'FTL';
         $kind = $isFcl ? 'FCL' : 'LCL';
 
-        $packages = $booking->packages()->orderBy('sequence')->get()->map(fn ($p) => [
+        $packages = $booking->packages()->with('cargoCategory')->orderBy('sequence')->get()->map(fn ($p) => [
             'id' => $p->id,
             'sequence' => $p->sequence,
             'description' => $p->description,
@@ -93,10 +154,11 @@ class ShipmentViewService
             'length' => $p->length,
             'width' => $p->width,
             'height' => $p->height,
+            'cargo_category' => $p->cargoCategory?->name ?? $p->cargoCategory?->code,
             'is_dangerous_goods' => (bool) $p->is_dangerous_goods,
         ])->all();
 
-        $containers = $booking->containers()->orderBy('sequence')->get()->map(fn ($c) => [
+        $containers = $booking->containers()->with(['containerType', 'cargoCategory'])->orderBy('sequence')->get()->map(fn ($c) => [
             'id' => $c->id,
             'sequence' => $c->sequence,
             'container_type' => $c->containerType?->name ?? $c->containerType?->size,
@@ -106,7 +168,7 @@ class ShipmentViewService
             'cargo_weight_kg' => (float) $c->gross_weight_kg,
             'volume_cbm' => (float) $c->volume_cbm,
             'cargo_description' => $c->cargo_description,
-            'cargo_category' => $booking->cargoCategory?->name ?? $booking->cargoCategory?->code,
+            'cargo_category' => $c->cargoCategory?->name ?? $c->cargoCategory?->code,
             'container_responsibility' => $booking->container_responsibility,
             'is_dangerous_goods' => (bool) $c->is_dangerous_goods,
         ])->all();
@@ -127,6 +189,21 @@ class ShipmentViewService
             'containers' => $containers,
             'summary' => $summary,
         ];
+    }
+
+    public function trackingTimeline(Shipment $shipment): array
+    {
+        return $shipment->trackings()
+            ->orderBy('tracked_at')
+            ->get()
+            ->map(fn ($t) => [
+                'occurred_at' => optional($t->tracked_at)->toIso8601String(),
+                'title' => $this->trackingTitle((string) $t->status),
+                'description' => $t->notes,
+                'location' => $t->location,
+                'status' => $t->status,
+            ])
+            ->all();
     }
 
     public function activityLog(Shipment $shipment): array

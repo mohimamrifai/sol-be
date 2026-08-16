@@ -7,9 +7,11 @@ use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
 use App\Models\PaymentProofAttachment;
+use App\Models\User;
 use App\Services\DocumentPdfService;
 use App\Services\MidtransService;
 use App\Services\PaymentNumberService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -20,6 +22,12 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 class PaymentController extends Controller
 {
     public const PAYMENT_METHODS = ['transfer', 'giro', 'cash', 'virtual_account', 'midtrans'];
+
+    /** @var list<string> */
+    private const ISSUED_DB_STATUSES = ['issued', 'unpaid'];
+
+    /** @var list<string> */
+    private const OPEN_DB_STATUSES = ['issued', 'partially_paid', 'unpaid', 'overdue'];
 
     public function __construct(
         private MidtransService $midtransService,
@@ -32,26 +40,26 @@ class PaymentController extends Controller
         $user = $request->user();
         $today = Carbon::today();
 
-        $base = Invoice::query()->where('company_id', $user->company_id);
+        $base = Invoice::query()
+            ->where('company_id', $user->company_id)
+            ->whereNotIn('status', ['draft', 'cancelled']);
 
         $paid = (clone $base)->where('status', 'paid')->count();
         $partiallyPaid = (clone $base)
             ->where('status', 'partially_paid')
-            ->where(function ($q) use ($today) {
-                $q->whereNull('due_date')->orWhere('due_date', '>=', $today);
-            })
+            ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today))
             ->count();
         $unpaid = (clone $base)
-            ->whereIn('status', ['issued', 'draft'])
+            ->whereIn('status', self::ISSUED_DB_STATUSES)
+            ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today))
+            ->whereDoesntHave('payments', fn ($q) => $q->whereIn('status', ['success', 'settlement']))
             ->count();
-        $overdue = (clone $base)
-            ->whereIn('status', ['issued', 'partially_paid'])
+        $overdueQuery = (clone $base)
+            ->whereIn('status', self::OPEN_DB_STATUSES)
             ->whereNotNull('due_date')
-            ->where('due_date', '<', $today)
-            ->whereRaw(
-                "(invoices.total_amount - COALESCE((select sum(payments.amount) from payments where payments.invoice_id = invoices.id and payments.status in ('success','settlement')), 0)) > 0"
-            )
-            ->count();
+            ->where('due_date', '<', $today);
+        $this->applyOutstandingFilter($overdueQuery);
+        $overdue = $overdueQuery->count();
 
         return response()->json([
             'data' => [
@@ -66,6 +74,7 @@ class PaymentController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
+        $today = Carbon::today();
 
         $validated = $request->validate([
             'per_page' => 'nullable|integer|min:1|max:100',
@@ -78,84 +87,102 @@ class PaymentController extends Controller
             'invoice_id' => 'nullable|integer',
         ]);
 
-        $query = Payment::query()
-            ->whereHas('invoice', fn ($q) => $q->where('company_id', $user->company_id))
+        $query = Invoice::query()
+            ->where('company_id', $user->company_id)
+            ->whereNotIn('status', ['draft', 'cancelled'])
             ->with([
-                'invoice:id,invoice_number,shipment_id,total_amount,status,due_date',
-                'invoice.shipment:id,shipment_number,waybill_number',
+                'company:id,name',
+                'latestPayment',
+                'shipment:id,shipment_number,waybill_number',
             ]);
 
         if (! empty($validated['status'])) {
             $st = $validated['status'];
             if ($st === 'unpaid') {
-                $query->where('status', 'pending');
+                $query
+                    ->whereIn('status', self::ISSUED_DB_STATUSES)
+                    ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today))
+                    ->whereDoesntHave('payments', fn ($q) => $q->whereIn('status', ['success', 'settlement']));
             } elseif ($st === 'partially_paid') {
-                $query->where('status', 'success')
-                    ->whereHas('invoice', fn ($q) => $q->where('status', 'partially_paid'));
+                $query
+                    ->where('status', 'partially_paid')
+                    ->where(fn ($q) => $this->applyNotOverdueFilter($q, $today));
             } elseif ($st === 'paid') {
-                $query->where('status', 'success')
-                    ->whereHas('invoice', fn ($q) => $q->where('status', 'paid'));
+                $query->where('status', 'paid');
             } elseif ($st === 'overdue') {
-                $today = Carbon::today();
-                $query->whereHas('invoice', function ($q) use ($today) {
-                    $q->whereIn('status', ['issued', 'partially_paid'])
-                        ->whereNotNull('due_date')
-                        ->where('due_date', '<', $today)
-                        ->whereRaw('(invoices.total_amount - COALESCE((select sum(p.amount) from payments p where p.invoice_id = invoices.id and p.status in (\'success\',\'settlement\')), 0)) > 0');
-                });
+                $query
+                    ->whereIn('status', self::OPEN_DB_STATUSES)
+                    ->whereNotNull('due_date')
+                    ->where('due_date', '<', $today);
+                $this->applyOutstandingFilter($query);
             }
         }
 
         if (! empty($validated['payment_method'])) {
-            $query->where('method', $validated['payment_method']);
+            $method = $validated['payment_method'];
+            $query->whereHas('latestPayment', fn ($q) => $q->where('method', $method));
         }
 
-        if (! empty($validated['payment_date_from'])) {
-            $query->whereDate('paid_at', '>=', $validated['payment_date_from']);
-        }
-        if (! empty($validated['payment_date_to'])) {
-            $query->whereDate('paid_at', '<=', $validated['payment_date_to']);
+        if (! empty($validated['payment_date_from']) || ! empty($validated['payment_date_to'])) {
+            $query->whereHas('payments', function ($q) use ($validated) {
+                $q->whereIn('status', ['success', 'settlement']);
+                if (! empty($validated['payment_date_from'])) {
+                    $q->whereDate('paid_at', '>=', $validated['payment_date_from']);
+                }
+                if (! empty($validated['payment_date_to'])) {
+                    $q->whereDate('paid_at', '<=', $validated['payment_date_to']);
+                }
+            });
         }
 
         if (! empty($validated['invoice_id'])) {
-            $query->where('invoice_id', $validated['invoice_id']);
+            $query->where('id', $validated['invoice_id']);
         }
 
         if (! empty($validated['search'])) {
             $s = $validated['search'];
             $query->where(function ($q) use ($s) {
-                $q->where('midtrans_order_id', 'like', "%{$s}%")
-                    ->orWhere('midtrans_transaction_id', 'like', "%{$s}%")
-                    ->orWhere('payment_number', 'like', "%{$s}%")
-                    ->orWhereHas('invoice', fn ($iq) => $iq->where('invoice_number', 'like', "%{$s}%"));
+                $q->where('invoice_number', 'like', "%{$s}%")
+                    ->orWhereHas('company', fn ($cq) => $cq->where('name', 'like', "%{$s}%"))
+                    ->orWhereHas('latestPayment', function ($pq) use ($s) {
+                        $pq->where('payment_number', 'like', "%{$s}%")
+                            ->orWhere('midtrans_order_id', 'like', "%{$s}%")
+                            ->orWhere('midtrans_transaction_id', 'like', "%{$s}%");
+                    });
             });
         }
 
-        $paginated = $query->orderBy('created_at', 'desc')->paginate($validated['per_page'] ?? 15);
+        $paginated = $query->orderByDesc('created_at')->paginate($validated['per_page'] ?? 15);
 
-        $paginated->getCollection()->transform(function (Payment $p) {
-            $invoice = $p->invoice;
-            $paidAmount = $invoice ? (float) $invoice->paidAmount() : 0.0;
-            $total = (float) ($invoice?->total_amount ?? 0);
-            $outstanding = $invoice ? max($total - $paidAmount, 0) : 0;
+        $paginated->getCollection()->transform(function (Invoice $inv) use ($today) {
+            $paidAmount = (float) $inv->paidAmount();
+            $total = (float) $inv->total_amount;
+            $outstanding = max($total - $paidAmount, 0);
+            $invoiceStatus = $this->resolveCustomerStatus((string) $inv->status, $inv->due_date, $outstanding, $today);
+            $latest = $inv->latestPayment;
 
             return [
-                'id' => $p->id,
-                'payment_no' => $p->displayNumber(),
-                'payment_number' => $p->payment_number,
-                'invoice_id' => $p->invoice_id,
-                'invoice_number' => $invoice?->invoice_number,
-                'shipment_number' => $invoice?->shipment?->shipment_number,
+                'id' => $latest?->id,
+                'payment_id' => $latest?->id,
+                'payment_no' => $latest?->displayNumber(),
+                'payment_number' => $latest?->payment_number,
+                'invoice_id' => $inv->id,
+                'invoice_number' => $inv->invoice_number,
+                'customer_name' => $inv->company?->name,
+                'shipment_number' => $inv->shipment?->shipment_number,
                 'invoice_amount' => $total,
                 'paid_amount' => $paidAmount,
                 'outstanding_amount' => $outstanding,
-                'amount' => (float) $p->amount,
-                'payment_method' => $p->method ?? ($p->payment_type ?: 'midtrans'),
-                'payment_type' => $p->payment_type,
-                'payment_date' => $p->paid_at?->toIso8601String() ?? $p->created_at?->toIso8601String(),
-                'status' => $p->status,
+                'amount' => $latest ? (float) $latest->amount : $outstanding,
+                'payment_method' => $latest?->method ?? ($latest?->payment_type ?: null),
+                'payment_type' => $latest?->payment_type,
+                'payment_date' => ($latest?->paid_at ?? $latest?->created_at)?->toIso8601String(),
+                'status' => $invoiceStatus,
+                'payment_status' => $latest?->status,
+                'has_payment_record' => $latest !== null,
                 'actions' => [
                     'can_view' => true,
+                    'detail_invoice_only' => $latest === null,
                 ],
             ];
         });
@@ -182,6 +209,21 @@ class PaymentController extends Controller
             $payment->load(['proofAttachments.uploader:id,name']);
         }
 
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $user->id,
+                'event_key' => 'payment_viewed',
+                'description' => 'Customer membuka Payment Link',
+                'meta' => [
+                    'ip' => $request->ip(),
+                    'user_agent' => (string) $request->userAgent(),
+                ],
+                'occurred_at' => now(),
+            ]);
+            $payment->load(['activities.actor:id,name']);
+        }
+
         $invoice = $payment->invoice;
         $paidAmount = (float) $invoice->paidAmount();
         $outstanding = max((float) $invoice->total_amount - $paidAmount, 0);
@@ -199,6 +241,12 @@ class PaymentController extends Controller
             ?? (isset($midtransResponse['expiry_time']) ? Carbon::parse($midtransResponse['expiry_time'])->toIso8601String() : null);
 
         $linkActive = $payment->status === 'pending' && (! $expiredAt || Carbon::parse($expiredAt)->isFuture());
+        $invoiceStatus = $this->resolveCustomerStatus(
+            (string) $invoice->status,
+            $invoice->due_date,
+            $outstanding,
+            Carbon::today()
+        );
 
         $paymentHistory = $invoice->payments
             ->sortByDesc(fn ($p) => $p->paid_at ?? $p->created_at)
@@ -228,13 +276,22 @@ class PaymentController extends Controller
         if ($payment->paid_at) {
             $timeline->push([
                 'occurred_at' => $payment->paid_at->toIso8601String(),
-                'activity' => 'Pembayaran diterima',
+                'activity' => 'Customer melakukan pembayaran',
+            ]);
+            $timeline->push([
+                'occurred_at' => $payment->paid_at->toIso8601String(),
+                'activity' => 'Pembayaran Rp'.number_format((float) $payment->amount, 0, ',', '.').' diterima',
             ]);
         }
-        if ($payment->isSuccess() && $invoice) {
+        if ($payment->isSuccess()) {
+            $settledAt = $payment->paid_at?->toIso8601String() ?? $payment->updated_at?->toIso8601String();
             $timeline->push([
-                'occurred_at' => $payment->paid_at?->toIso8601String() ?? $payment->created_at?->toIso8601String(),
-                'activity' => 'Status Invoice menjadi '.$invoice->status,
+                'occurred_at' => $settledAt,
+                'activity' => 'Pembayaran berhasil (Settlement)',
+            ]);
+            $timeline->push([
+                'occurred_at' => $settledAt,
+                'activity' => 'Status Invoice menjadi Paid',
             ]);
         }
 
@@ -293,7 +350,8 @@ class PaymentController extends Controller
                     'outstanding_amount' => $outstanding,
                     'status' => $invoice->status,
                 ],
-                'status' => $payment->status,
+                'status' => $invoiceStatus,
+                'payment_record_status' => $payment->status,
                 'created_date' => $payment->created_at?->toIso8601String(),
                 'paid_at' => $payment->paid_at?->toIso8601String(),
                 'payment_method' => $payment->method ?? $payment->payment_type,
@@ -314,12 +372,13 @@ class PaymentController extends Controller
                 ],
                 'online_payment' => [
                     'active' => $linkActive,
+                    'link_status' => $linkActive ? 'active' : 'expired',
                     'link' => $midtransResponse['redirect_url'] ?? null,
                     'token' => $midtransResponse['token'] ?? null,
                     'expired_at' => $expiredAt,
                     'payment_gateway' => 'Midtrans',
                     'transaction_id' => $payment->midtrans_transaction_id,
-                    'payment_status' => $payment->status,
+                    'payment_status' => $this->mapMidtransDisplayStatus($payment),
                 ],
                 'manual_payment' => [
                     'enabled' => $manualEnabled,
@@ -328,7 +387,9 @@ class PaymentController extends Controller
                 'supporting_documents' => $supportingDocs,
                 'activity_timeline' => $timeline,
                 'actions' => [
-                    'can_pay_now' => $outstanding > 0 && ! in_array($invoice->status, ['draft', 'cancelled', 'paid'], true),
+                    'can_pay_now' => $this->canUserPayNow($user, $invoice, $outstanding),
+                    'can_sync_midtrans' => ! $user->hasRole('viewer') && $payment->midtrans_order_id !== null,
+                    'can_submit_manual' => ! $user->hasRole('viewer') && $manualEnabled && ! $payment->isSuccess(),
                 ],
             ],
         ]);
@@ -339,6 +400,10 @@ class PaymentController extends Controller
         $user = $request->user();
 
         if ($invoice->company_id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        if ($user->hasRole('viewer')) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
@@ -464,6 +529,10 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
+        if ($user->hasRole('viewer')) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
         if (! $payment->midtrans_order_id) {
             return response()->json(['message' => 'Pembayaran ini tidak memiliki Order ID Midtrans.'], 422);
         }
@@ -508,6 +577,10 @@ class PaymentController extends Controller
         $payment->loadMissing('invoice.company');
         $company = $payment->invoice?->company;
         if (! $company || $company->id !== $user->company_id) {
+            return response()->json(['message' => 'Akses ditolak.'], 403);
+        }
+
+        if ($user->hasRole('viewer')) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
@@ -651,5 +724,86 @@ class PaymentController extends Controller
             'webp' => 'image/webp',
             default => 'application/octet-stream',
         };
+    }
+
+    private function applyOutstandingFilter(Builder $query): void
+    {
+        $query->whereRaw(
+            "(invoices.total_amount - COALESCE((select sum(payments.amount) from payments where payments.invoice_id = invoices.id and payments.status in ('success','settlement')), 0)) > 0"
+        );
+    }
+
+    private function applyNotOverdueFilter(Builder $query, Carbon $today): void
+    {
+        $query->where(function ($q) use ($today) {
+            $q->whereNull('due_date')->orWhere('due_date', '>=', $today);
+        });
+    }
+
+    private function normalizeBaseStatus(string $status): string
+    {
+        return match ($status) {
+            'unpaid', 'overdue' => 'issued',
+            default => $status,
+        };
+    }
+
+    private function resolveCustomerStatus(
+        string $dbStatus,
+        ?Carbon $dueDate,
+        float $outstanding,
+        Carbon $today,
+    ): string {
+        if ($dbStatus === 'paid' || $outstanding <= 0) {
+            return 'paid';
+        }
+
+        $normalized = $this->normalizeBaseStatus($dbStatus);
+
+        if (in_array($normalized, ['issued', 'partially_paid'], true)
+            && $dueDate !== null
+            && $dueDate->lt($today)
+            && $outstanding > 0) {
+            return 'overdue';
+        }
+
+        if ($normalized === 'partially_paid') {
+            return 'partially_paid';
+        }
+
+        if ($normalized === 'issued' && $outstanding > 0) {
+            return 'unpaid';
+        }
+
+        return $normalized;
+    }
+
+    private function mapMidtransDisplayStatus(Payment $payment): string
+    {
+        return match ($payment->status) {
+            Payment::STATUS_SUCCESS, Payment::STATUS_SETTLEMENT => 'settlement',
+            Payment::STATUS_PENDING => 'pending',
+            Payment::STATUS_EXPIRED => 'expired',
+            Payment::STATUS_CANCELLED => 'cancelled',
+            Payment::STATUS_FAILED => 'failed',
+            default => (string) $payment->status,
+        };
+    }
+
+    private function canUserPayNow(User $user, Invoice $invoice, float $outstandingAmount): bool
+    {
+        if ($outstandingAmount <= 0) {
+            return false;
+        }
+
+        if (in_array($invoice->status, ['draft', 'cancelled', 'paid'], true)) {
+            return false;
+        }
+
+        if ($user->hasRole('viewer')) {
+            return false;
+        }
+
+        return true;
     }
 }

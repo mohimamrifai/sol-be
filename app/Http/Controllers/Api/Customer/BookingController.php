@@ -5,8 +5,8 @@ namespace App\Http\Controllers\Api\Customer;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\BookingAttachment;
-use App\Models\Branch;
 use App\Models\CargoCategory;
+use App\Models\CustomerLocation;
 use App\Models\Invoice;
 use App\Models\ServiceType;
 use App\Models\Shipment;
@@ -144,6 +144,10 @@ class BookingController extends Controller
     {
         $user = $request->user();
 
+        if (! $this->canMutateBookings($user)) {
+            return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk membuat booking.'], 403);
+        }
+
         if ($user->company && $user->company->hasOverdueInvoices()) {
             return response()->json([
                 'message' => 'Perusahaan Anda memiliki invoice jatuh tempo. Silakan lunasi terlebih dahulu.',
@@ -199,13 +203,16 @@ class BookingController extends Controller
             'shipper_name' => $isDraft ? 'nullable|string|max:255' : 'required|string|max:255',
             'shipper_address' => $isDraft ? 'nullable|string' : 'required|string',
             'shipper_phone' => $isDraft ? 'nullable|string|max:50' : 'required|string|max:50',
-            'shipper_branch_id' => [
+            'shipper_location_id' => [
                 $isDraft ? 'nullable' : 'required',
                 'integer',
-                'exists:branches,id',
+                'exists:customer_locations,id',
                 function ($attribute, $value, $fail) use ($user) {
-                    if ($value && Branch::where('id', $value)->where('company_id', $user->company_id)->doesntExist()) {
-                        $fail('Customer Location tidak ditemukan.');
+                    if ($value && CustomerLocation::where('id', $value)
+                        ->where('company_id', $user->company_id)
+                        ->where('status', 'active')
+                        ->doesntExist()) {
+                        $fail('Customer Location tidak ditemukan atau tidak aktif.');
                     }
                 },
             ],
@@ -214,13 +221,16 @@ class BookingController extends Controller
             'consignee_address' => $isDraft ? 'nullable|string' : 'required|string',
             'consignee_phone' => $isDraft ? 'nullable|string|max:50' : 'required|string|max:50',
             'consignee_type' => $isDraft ? 'nullable|in:customer_location,external' : 'required|in:customer_location,external',
-            'consignee_branch_id' => [
+            'consignee_location_id' => [
                 'nullable',
                 'integer',
-                'exists:branches,id',
+                'exists:customer_locations,id',
                 function ($attribute, $value, $fail) use ($user) {
-                    if ($value && Branch::where('id', $value)->where('company_id', $user->company_id)->doesntExist()) {
-                        $fail('Customer Location tidak ditemukan.');
+                    if ($value && CustomerLocation::where('id', $value)
+                        ->where('company_id', $user->company_id)
+                        ->where('status', 'active')
+                        ->doesntExist()) {
+                        $fail('Customer Location tidak ditemukan atau tidak aktif.');
                     }
                 },
             ],
@@ -262,7 +272,7 @@ class BookingController extends Controller
             'packages.*.piece_count' => 'nullable|integer|min:1',
             'packages.*.package_type' => 'nullable|string|max:80',
             'packages.*.remark' => 'nullable|string',
-            'packages.*.is_dangerous_goods' => 'nullable|boolean',
+            'packages.*.cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'packages.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'packages.*.un_number' => 'nullable|string|max:50',
             'packages.*.packing_group' => 'nullable|string|max:10',
@@ -282,6 +292,7 @@ class BookingController extends Controller
             'containers.*.volume_cbm' => 'nullable|numeric|min:0',
             'containers.*.cargo_description' => 'nullable|string|max:500',
             'containers.*.remark' => 'nullable|string',
+            'containers.*.cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'containers.*.equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'containers.*.temperature' => 'nullable|numeric',
             'containers.*.is_dangerous_goods' => 'nullable|boolean',
@@ -313,8 +324,12 @@ class BookingController extends Controller
                 }
             }
 
-            if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_branch_id'])) {
-                $errors['consignee_branch_id'][] = 'Customer Location wajib dipilih.';
+            if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_location_id'])) {
+                $errors['consignee_location_id'][] = 'Customer Location wajib dipilih.';
+            }
+
+            if (empty($data['shipper_location_id'])) {
+                $errors['shipper_location_id'][] = 'Customer Location wajib dipilih.';
             }
 
             $serviceType = ServiceType::find($data['service_type_id']);
@@ -341,7 +356,10 @@ class BookingController extends Controller
                     if (empty($pkg['piece_count'])) {
                         $errors["packages.$i.piece_count"][] = 'Quantity wajib diisi.';
                     }
-                    if (! empty($pkg['is_dangerous_goods'])) {
+                    if (empty($pkg['cargo_category_id'])) {
+                        $errors["packages.$i.cargo_category_id"][] = 'Cargo Category wajib diisi.';
+                    }
+                    if ($this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null)) {
                         if (empty($pkg['dg_class_id'])) {
                             $errors["packages.$i.dg_class_id"][] = 'DG Class wajib diisi.';
                         }
@@ -369,10 +387,10 @@ class BookingController extends Controller
                     if (empty($ctr['quantity'])) {
                         $errors["containers.$i.quantity"][] = 'Quantity wajib diisi.';
                     }
-                    if (empty($ctr['cargo_description'])) {
-                        $errors["containers.$i.cargo_description"][] = 'Cargo Description wajib diisi.';
+                    if (empty($ctr['cargo_category_id'])) {
+                        $errors["containers.$i.cargo_category_id"][] = 'Cargo Category wajib diisi.';
                     }
-                    if (! empty($ctr['is_dangerous_goods'])) {
+                    if ($this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null)) {
                         if (empty($ctr['dg_class_id'])) {
                             $errors["containers.$i.dg_class_id"][] = 'DG Class wajib diisi.';
                         }
@@ -402,6 +420,11 @@ class BookingController extends Controller
 
         return DB::transaction(function () use ($request, $user, $data, $isDraft) {
             unset($data['confirm_booking']);
+            $packages = $data['packages'] ?? [];
+            $containers = $data['containers'] ?? [];
+            $additionalServices = $data['additional_services'] ?? [];
+            unset($data['is_draft'], $data['packages'], $data['containers'], $data['additional_services'], $data['attachments_meta']);
+
             $data['confirmed_terms_at'] = $isDraft ? null : now();
 
             if (! empty($data['shipper_snapshot']) && is_array($data['shipper_snapshot'])) {
@@ -447,21 +470,20 @@ class BookingController extends Controller
             }
 
             $booking = Booking::create([
-                ...$data,
+                ...collect($data)->only((new Booking)->getFillable())->all(),
                 'company_id' => $user->company_id,
                 'user_id' => $user->id,
                 'status' => $isDraft ? Booking::STATUS_DRAFT : Booking::STATUS_SUBMITTED,
                 'estimated_price' => $estimate['estimated_price'] ?? null,
                 'msds_file' => $msdsPath,
-                'additional_services' => null, // we use the relationship below
                 'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);
             $booking->recalculateCargoMetrics();
             $booking->save();
 
             // Snapshot additional services
-            if (! empty($data['additional_services'])) {
-                foreach ($data['additional_services'] as $svc) {
+            if (! empty($additionalServices)) {
+                foreach ($additionalServices as $svc) {
                     $booking->additionalServices()->attach($svc['id'], [
                         'notes' => $svc['notes'] ?? null,
                     ]);
@@ -469,11 +491,12 @@ class BookingController extends Controller
             }
 
             // Per-item packages (LCL)
-            if (! empty($data['packages'])) {
+            if (! empty($packages)) {
                 $sequence = 1;
-                foreach ($data['packages'] as $i => $pkg) {
+                foreach ($packages as $i => $pkg) {
                     $msdsItem = $request->file("packages_msds_files.$i");
                     $pkgMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $isDg = $this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null);
                     $booking->packages()->create([
                         'sequence' => $sequence++,
                         'description' => $pkg['description'] ?? null,
@@ -485,7 +508,8 @@ class BookingController extends Controller
                         'piece_count' => $pkg['piece_count'] ?? 1,
                         'package_type' => $pkg['package_type'] ?? null,
                         'remark' => $pkg['remark'] ?? null,
-                        'is_dangerous_goods' => $pkg['is_dangerous_goods'] ?? false,
+                        'cargo_category_id' => $pkg['cargo_category_id'] ?? null,
+                        'is_dangerous_goods' => $isDg,
                         'dg_class_id' => $pkg['dg_class_id'] ?? null,
                         'un_number' => $pkg['un_number'] ?? null,
                         'packing_group' => $pkg['packing_group'] ?? null,
@@ -499,11 +523,12 @@ class BookingController extends Controller
             }
 
             // Per-item containers (FCL)
-            if (! empty($data['containers'])) {
+            if (! empty($containers)) {
                 $sequence = 1;
-                foreach ($data['containers'] as $i => $ctr) {
+                foreach ($containers as $i => $ctr) {
                     $msdsItem = $request->file("containers_msds_files.$i");
                     $ctrMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $isDg = $this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null);
                     $booking->containers()->create([
                         'sequence' => $sequence++,
                         'container_type_id' => $ctr['container_type_id'] ?? null,
@@ -514,9 +539,10 @@ class BookingController extends Controller
                         'volume_cbm' => $ctr['volume_cbm'] ?? null,
                         'cargo_description' => $ctr['cargo_description'] ?? null,
                         'remark' => $ctr['remark'] ?? null,
+                        'cargo_category_id' => $ctr['cargo_category_id'] ?? null,
                         'equipment_condition' => $ctr['equipment_condition'] ?? null,
                         'temperature' => $ctr['temperature'] ?? null,
-                        'is_dangerous_goods' => $ctr['is_dangerous_goods'] ?? false,
+                        'is_dangerous_goods' => $isDg,
                         'dg_class_id' => $ctr['dg_class_id'] ?? null,
                         'un_number' => $ctr['un_number'] ?? null,
                         'packing_group' => $ctr['packing_group'] ?? null,
@@ -597,9 +623,10 @@ class BookingController extends Controller
             'serviceType', 'containerType', 'additionalServices',
             'shipment', 'activities.actor', 'attachments.uploader',
             'packages.dgClass', 'containers.dgClass', 'containers.containerType',
+            'packages.cargoCategory', 'containers.cargoCategory',
         ]);
         $booking->setAttribute('has_shipment', $booking->shipment()->exists());
-        $booking->setAttribute('available_actions', $this->availableActions($booking));
+        $booking->setAttribute('available_actions', $this->availableActions($booking, $user));
 
         $costBreakdown = null;
         if ($booking->estimated_price !== null) {
@@ -632,6 +659,10 @@ class BookingController extends Controller
     public function update(Request $request, Booking $booking): JsonResponse
     {
         $user = $request->user();
+
+        if (! $this->canMutateBookings($user)) {
+            return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk mengubah booking.'], 403);
+        }
 
         if ($booking->company_id !== $user->company_id) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
@@ -734,7 +765,7 @@ class BookingController extends Controller
                 'originLocation', 'destinationLocation', 'transportMode',
                 'serviceType', 'containerType', 'additionalServices',
                 'shipment', 'activities.actor', 'attachments.uploader',
-                'packages.dgClass', 'containers.dgClass',
+                'packages.dgClass', 'packages.cargoCategory', 'containers.dgClass', 'containers.cargoCategory',
             ]);
 
             return response()->json([
@@ -752,6 +783,10 @@ class BookingController extends Controller
     public function submit(Request $request, Booking $booking): JsonResponse
     {
         $user = $request->user();
+
+        if (! $this->canMutateBookings($user)) {
+            return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk submit booking.'], 403);
+        }
 
         if ($booking->company_id !== $user->company_id) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
@@ -793,6 +828,10 @@ class BookingController extends Controller
     {
         $user = $request->user();
 
+        if (! $this->canMutateBookings($user)) {
+            return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk membatalkan booking.'], 403);
+        }
+
         if ($booking->company_id !== $user->company_id) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
@@ -833,6 +872,10 @@ class BookingController extends Controller
     public function duplicate(Request $request, Booking $booking): JsonResponse
     {
         $user = $request->user();
+
+        if (! $this->canMutateBookings($user)) {
+            return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk menduplikasi booking.'], 403);
+        }
 
         if ($booking->company_id !== $user->company_id) {
             return response()->json(['message' => 'Akses ditolak.'], 403);
@@ -976,27 +1019,34 @@ class BookingController extends Controller
 
     // ── Internal helpers ───────────────────────────────────────────────
 
-    private function availableActions(Booking $booking): array
+    private function availableActions(Booking $booking, $user = null): array
     {
+        $canMutate = $user === null || $this->canMutateBookings($user);
+
         $actions = [];
         switch ($booking->status) {
             case Booking::STATUS_DRAFT:
-                $actions = ['edit', 'submit', 'cancel'];
+                $actions = $canMutate ? ['edit', 'submit', 'cancel'] : ['view'];
                 break;
             case Booking::STATUS_SUBMITTED:
-                $actions = $booking->isCancellable() ? ['view', 'cancel'] : ['view'];
+                $actions = $canMutate && $booking->isCancellable() ? ['view', 'cancel'] : ['view'];
                 break;
             case Booking::STATUS_APPROVED:
-                $actions = ['view', 'duplicate'];
+                $actions = $canMutate ? ['view', 'duplicate'] : ['view'];
                 break;
             case Booking::STATUS_REJECTED:
-                $actions = ['view', 'duplicate'];
+                $actions = $canMutate ? ['view', 'duplicate'] : ['view'];
                 break;
             default:
                 $actions = ['view'];
         }
 
         return $actions;
+    }
+
+    private function canMutateBookings($user): bool
+    {
+        return $user->can('create_bookings') || $user->can('manage_bookings');
     }
 
     private function calcPackageCbm(array $pkg): ?float
@@ -1009,6 +1059,17 @@ class BookingController extends Controller
         return $l > 0 && $w > 0 && $h > 0
             ? round((($l * $w * $h) / 1_000_000) * max($qty, 1), 4)
             : null;
+    }
+
+    private function isDangerousCargoCategory(mixed $cargoCategoryId): bool
+    {
+        if ($cargoCategoryId === null || $cargoCategoryId === '') {
+            return false;
+        }
+
+        $cat = CargoCategory::find((int) $cargoCategoryId);
+
+        return $cat !== null && strtoupper((string) $cat->code) === 'DG';
     }
 
     /**

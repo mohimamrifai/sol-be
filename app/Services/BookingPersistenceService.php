@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Booking;
-use App\Models\Branch;
 use App\Models\CargoCategory;
+use App\Models\CustomerLocation;
 use App\Models\ServiceType;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -36,8 +36,8 @@ final class BookingPersistenceService
         return [
             'container_responsibility' => 'nullable|in:SOC,COC',
             'consignee_type' => $isDraft ? 'nullable|in:customer_location,external' : 'nullable|in:customer_location,external',
-            'consignee_branch_id' => 'nullable|integer|exists:branches,id',
-            'shipper_branch_id' => 'nullable|integer|exists:branches,id',
+            'consignee_location_id' => 'nullable|integer|exists:customer_locations,id',
+            'shipper_location_id' => 'nullable|integer|exists:customer_locations,id',
             'shipper_snapshot' => 'nullable|array',
             'consignee_snapshot' => 'nullable|array',
             'delivery_notes' => 'nullable|string',
@@ -50,6 +50,7 @@ final class BookingPersistenceService
             'packages.*.piece_count' => 'nullable|integer|min:1',
             'packages.*.package_type' => 'nullable|string|max:80',
             'packages.*.remark' => 'nullable|string',
+            'packages.*.cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'packages.*.is_dangerous_goods' => 'nullable|boolean',
             'packages.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'packages.*.un_number' => 'nullable|string|max:50',
@@ -64,6 +65,7 @@ final class BookingPersistenceService
             'containers.*.volume_cbm' => 'nullable|numeric|min:0',
             'containers.*.cargo_description' => 'nullable|string|max:500',
             'containers.*.remark' => 'nullable|string',
+            'containers.*.cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'containers.*.equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'containers.*.temperature' => 'nullable|numeric',
             'containers.*.is_dangerous_goods' => 'nullable|boolean',
@@ -99,18 +101,24 @@ final class BookingPersistenceService
             }
         }
 
-        if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_branch_id'])) {
-            $errors['consignee_branch_id'][] = 'Customer Location wajib dipilih.';
+        if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_location_id'])) {
+            $errors['consignee_location_id'][] = 'Customer Location wajib dipilih.';
         }
 
-        if ($companyId && ! empty($data['shipper_branch_id'])) {
-            if (Branch::where('id', $data['shipper_branch_id'])->where('company_id', $companyId)->doesntExist()) {
-                $errors['shipper_branch_id'][] = 'Customer Location tidak ditemukan.';
+        if ($companyId && ! empty($data['shipper_location_id'])) {
+            if (CustomerLocation::where('id', $data['shipper_location_id'])
+                ->where('company_id', $companyId)
+                ->where('status', 'active')
+                ->doesntExist()) {
+                $errors['shipper_location_id'][] = 'Customer Location tidak ditemukan atau tidak aktif.';
             }
         }
-        if ($companyId && ! empty($data['consignee_branch_id'])) {
-            if (Branch::where('id', $data['consignee_branch_id'])->where('company_id', $companyId)->doesntExist()) {
-                $errors['consignee_branch_id'][] = 'Customer Location tidak ditemukan.';
+        if ($companyId && ! empty($data['consignee_location_id'])) {
+            if (CustomerLocation::where('id', $data['consignee_location_id'])
+                ->where('company_id', $companyId)
+                ->where('status', 'active')
+                ->doesntExist()) {
+                $errors['consignee_location_id'][] = 'Customer Location tidak ditemukan atau tidak aktif.';
             }
         }
 
@@ -139,6 +147,12 @@ final class BookingPersistenceService
                 if (empty($pkg['piece_count'])) {
                     $errors["packages.$i.piece_count"][] = 'Quantity wajib diisi.';
                 }
+                if (empty($pkg['cargo_category_id'])) {
+                    $errors["packages.$i.cargo_category_id"][] = 'Cargo Category wajib diisi.';
+                }
+                if ($this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null)) {
+                    $errors = array_merge($errors, $this->validateDgItemFields($pkg, "packages.$i", $request, "packages_msds_files.$i"));
+                }
             }
         }
 
@@ -150,8 +164,11 @@ final class BookingPersistenceService
                 if (empty($ctr['quantity'])) {
                     $errors["containers.$i.quantity"][] = 'Quantity wajib diisi.';
                 }
-                if (empty($ctr['cargo_description'])) {
-                    $errors["containers.$i.cargo_description"][] = 'Cargo Description wajib diisi.';
+                if (empty($ctr['cargo_category_id'])) {
+                    $errors["containers.$i.cargo_category_id"][] = 'Cargo Category wajib diisi.';
+                }
+                if ($this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null)) {
+                    $errors = array_merge($errors, $this->validateDgItemFields($ctr, "containers.$i", $request, "containers_msds_files.$i"));
                 }
             }
         }
@@ -178,6 +195,8 @@ final class BookingPersistenceService
             $msdsItem = $request->file("packages_msds_files.$i");
             $pkgMsds = $msdsItem instanceof UploadedFile ? $msdsItem->store('msds_files', 'public') : null;
 
+            $isDg = $this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null);
+
             $booking->packages()->create([
                 'sequence' => $sequence++,
                 'description' => $pkg['description'] ?? null,
@@ -189,7 +208,8 @@ final class BookingPersistenceService
                 'piece_count' => $pkg['piece_count'] ?? 1,
                 'package_type' => $pkg['package_type'] ?? null,
                 'remark' => $pkg['remark'] ?? null,
-                'is_dangerous_goods' => $pkg['is_dangerous_goods'] ?? false,
+                'cargo_category_id' => $pkg['cargo_category_id'] ?? null,
+                'is_dangerous_goods' => $isDg,
                 'dg_class_id' => $pkg['dg_class_id'] ?? null,
                 'un_number' => $pkg['un_number'] ?? null,
                 'packing_group' => $pkg['packing_group'] ?? null,
@@ -216,6 +236,8 @@ final class BookingPersistenceService
             $msdsItem = $request->file("containers_msds_files.$i");
             $ctrMsds = $msdsItem instanceof UploadedFile ? $msdsItem->store('msds_files', 'public') : null;
 
+            $isDg = $this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null);
+
             $booking->containers()->create([
                 'sequence' => $sequence++,
                 'container_type_id' => $ctr['container_type_id'] ?? null,
@@ -226,9 +248,10 @@ final class BookingPersistenceService
                 'volume_cbm' => $ctr['volume_cbm'] ?? null,
                 'cargo_description' => $ctr['cargo_description'] ?? null,
                 'remark' => $ctr['remark'] ?? null,
+                'cargo_category_id' => $ctr['cargo_category_id'] ?? null,
                 'equipment_condition' => $ctr['equipment_condition'] ?? null,
                 'temperature' => $ctr['temperature'] ?? null,
-                'is_dangerous_goods' => $ctr['is_dangerous_goods'] ?? false,
+                'is_dangerous_goods' => $isDg,
                 'dg_class_id' => $ctr['dg_class_id'] ?? null,
                 'un_number' => $ctr['un_number'] ?? null,
                 'packing_group' => $ctr['packing_group'] ?? null,
@@ -290,5 +313,43 @@ final class BookingPersistenceService
         return $l > 0 && $w > 0 && $h > 0
             ? round((($l * $w * $h) / 1_000_000) * max($qty, 1), 4)
             : null;
+    }
+
+    public function isDangerousCargoCategory(mixed $cargoCategoryId): bool
+    {
+        if ($cargoCategoryId === null || $cargoCategoryId === '') {
+            return false;
+        }
+
+        $cat = CargoCategory::find((int) $cargoCategoryId);
+
+        return $cat !== null && strtoupper((string) $cat->code) === 'DG';
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, list<string>>
+     */
+    private function validateDgItemFields(array $item, string $prefix, Request $request, string $msdsKey): array
+    {
+        $errors = [];
+
+        if (empty($item['dg_class_id'])) {
+            $errors["{$prefix}.dg_class_id"][] = 'DG Class wajib diisi.';
+        }
+        if (empty($item['un_number'])) {
+            $errors["{$prefix}.un_number"][] = 'UN Number wajib diisi.';
+        }
+        if (empty($item['packing_group'])) {
+            $errors["{$prefix}.packing_group"][] = 'Packing Group wajib diisi.';
+        }
+        if (empty($item['proper_shipping_name'])) {
+            $errors["{$prefix}.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
+        }
+        if (! $request->file($msdsKey)) {
+            $errors[$msdsKey][] = 'MSDS / SDS wajib diunggah.';
+        }
+
+        return $errors;
     }
 }

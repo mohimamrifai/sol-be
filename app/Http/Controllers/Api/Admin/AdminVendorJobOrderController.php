@@ -8,6 +8,7 @@ use App\Enums\VendorJobOrderStatus;
 use App\Http\Controllers\Controller;
 use App\Models\VendorJobOrder;
 use App\Models\VendorJobOrderDocument;
+use App\Services\DocumentPdfService;
 use App\Services\VendorJobOrderService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,7 +16,10 @@ use Illuminate\Support\Facades\Storage;
 
 class AdminVendorJobOrderController extends Controller
 {
-    public function __construct(private VendorJobOrderService $jobOrderService) {}
+    public function __construct(
+        private VendorJobOrderService $jobOrderService,
+        private DocumentPdfService $pdfService,
+    ) {}
 
     public function stats(): JsonResponse
     {
@@ -212,6 +216,14 @@ class AdminVendorJobOrderController extends Controller
         ]);
     }
 
+    public function pdf(VendorJobOrder $vendorJobOrder)
+    {
+        $pdf = $this->pdfService->renderVendorJobOrder($vendorJobOrder);
+        $filename = addslashes($vendorJobOrder->job_order_number.'.pdf');
+
+        return $pdf->download($filename);
+    }
+
     private function transformListRow(VendorJobOrder $jo): array
     {
         $origin = $jo->shipment?->originLocation;
@@ -272,6 +284,7 @@ class AdminVendorJobOrderController extends Controller
             'is_editable' => $jo->isEditable(),
             'can_verify_completion' => $jo->status === VendorJobOrderStatus::InProgress,
             'can_send' => $jo->status === VendorJobOrderStatus::Draft,
+            'has_job_order_pdf' => true,
             'documents' => $jo->documents->map(fn ($d) => $this->transformDocument($d)),
             'activities' => $jo->activities->map(fn ($a) => [
                 'activity' => $a->activity,

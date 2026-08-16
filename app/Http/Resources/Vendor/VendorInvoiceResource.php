@@ -6,6 +6,7 @@ namespace App\Http\Resources\Vendor;
 
 use App\Enums\VendorInvoiceStatus;
 use App\Models\VendorInvoice;
+use App\Support\VendorShipmentHelper;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -25,6 +26,7 @@ class VendorInvoiceResource extends JsonResource
                 'id' => $this->shipment->id,
                 'shipment_no' => $this->shipment->shipment_no,
                 'shipment_number' => $this->shipment->shipment_number,
+                'jo_number' => VendorShipmentHelper::joNumber($this->shipment),
             ]),
             'invoice_date' => $this->invoice_date?->toDateString(),
             'due_date' => $this->due_date?->toDateString(),

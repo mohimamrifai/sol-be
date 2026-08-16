@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\Shipment;
+use App\Models\VendorJobOrder;
 use Barryvdh\DomPDF\Facade\Pdf;
 
 /**
@@ -48,5 +49,22 @@ class DocumentPdfService
         $payment->loadMissing(['invoice.company', 'invoice.shipment', 'invoice.shipment.booking']);
 
         return Pdf::loadView('pdf.payment-receipt', ['payment' => $payment]);
+    }
+
+    public function renderVendorJobOrder(VendorJobOrder $jobOrder)
+    {
+        $jobOrder->loadMissing([
+            'vendor',
+            'shipment.company',
+            'originYard',
+            'destinationYard',
+            'train',
+        ]);
+
+        return Pdf::loadView('pdf.vendor-job-order', [
+            'jobOrder' => $jobOrder,
+            'vendorSnap' => $jobOrder->vendor_snapshot ?? [],
+            'snap' => $jobOrder->shipment_snapshot ?? [],
+        ]);
     }
 }

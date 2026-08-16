@@ -35,7 +35,7 @@ class DocumentController extends Controller
         $user = $request->user();
         $data = $request->validate([
             'search' => ['nullable', 'string', 'max:200'],
-            'type' => ['nullable', 'string', 'in:booking,shipment,billing'],
+            'type' => ['nullable', 'string', 'in:booking,shipment,invoice,tax_invoice,pod,delivery_order,other,billing,booking_attachment,consignment_note,proof_of_delivery,payment_receipt,other_supporting,msds_file'],
             'shipment_id' => ['nullable', 'integer'],
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
@@ -126,6 +126,8 @@ class DocumentController extends Controller
                 $forceDownload,
             ),
             'proof_of_delivery' => $this->servePhoto($source, $document, $forceDownload),
+            'msds_file' => $this->serveStoredFile($source, $document, $forceDownload),
+            'other_supporting' => $this->serveBookingAttachment($source, $document, $forceDownload),
             'invoice' => $this->servePdf(
                 $this->pdf->renderInvoice(Invoice::with([])->findOrFail((int) $source['id'])),
                 $this->safeFilename($document['name'] ?? 'invoice', 'pdf'),
@@ -208,6 +210,28 @@ class DocumentController extends Controller
             'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             default => 'application/octet-stream',
         };
+    }
+
+    private function serveStoredFile(array $source, array $document, bool $force): SymfonyResponse
+    {
+        $path = $source['file_path'] ?? null;
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            abort(404, 'File tidak ditemukan.');
+        }
+
+        $disk = Storage::disk('public');
+        $mime = $document['mime_type'] ?? $this->guessMime($path);
+        $filename = $document['name'] ?? basename($path);
+        $content = $disk->get($path);
+
+        $headers = [
+            'Content-Type' => $mime,
+            'Content-Length' => (string) strlen($content),
+        ];
+        $headers['Content-Disposition'] = ($force ? 'attachment' : 'inline')
+            .'; filename="'.addslashes($filename).'"';
+
+        return response($content, 200, $headers);
     }
 
     private function servePdf($pdf, string $filename, bool $force): SymfonyResponse

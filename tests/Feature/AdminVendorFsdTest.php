@@ -145,5 +145,54 @@ class AdminVendorFsdTest extends TestCase
 
         $this->assertSame(AdminVendorPaymentRequestStatus::Paid->value, VendorPaymentRequest::find($paymentId)?->status?->value);
         $this->assertSame(AdminVendorInvoiceStatus::Paid->value, VendorInvoice::find($invoiceId)?->statusValue());
+
+        $this->get("/api/admin/vendor-job-orders/{$jo->id}/pdf")->assertOk();
+        $this->get("/api/admin/vendor-job-orders/{$jo->id}/pdf")->assertHeader('content-type', 'application/pdf');
+
+        $otherDoc = UploadedFile::fake()->create('supporting.pdf', 50, 'application/pdf');
+        $this->post("/api/admin/vendor-payments/{$paymentId}/documents", [
+            'document_type' => 'other_document',
+            'file' => $otherDoc,
+        ])->assertCreated();
+    }
+
+    public function test_vendor_filter_some_both_returns_multi_type_vendors(): void
+    {
+        $admin = User::factory()->create(['user_type' => 'internal', 'status' => 'active']);
+        $admin->syncRoles(['super_admin']);
+        Sanctum::actingAs($admin);
+
+        Vendor::create([
+            'name' => 'Multi Vendor',
+            'code' => 'VND00001',
+            'business_entity' => 'company',
+            'vendor_types' => ['trucking', 'rail_operator'],
+            'npwp' => '111',
+            'email' => 'multi@test.com',
+            'phone' => '08111',
+            'address' => 'Addr',
+            'is_active' => true,
+            'payment_terms' => '30_days',
+            'payment_method' => 'transfer',
+        ]);
+
+        Vendor::create([
+            'name' => 'Single Vendor',
+            'code' => 'VND00002',
+            'business_entity' => 'company',
+            'vendor_types' => ['trucking'],
+            'npwp' => '222',
+            'email' => 'single@test.com',
+            'phone' => '08222',
+            'address' => 'Addr',
+            'is_active' => true,
+            'payment_terms' => '30_days',
+            'payment_method' => 'transfer',
+        ]);
+
+        $res = $this->getJson('/api/admin/vendors?vendor_type=some_both')->assertOk();
+        $names = collect($res->json('data'))->pluck('name')->all();
+        $this->assertContains('Multi Vendor', $names);
+        $this->assertNotContains('Single Vendor', $names);
     }
 }

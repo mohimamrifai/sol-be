@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\Vendor;
 
+use App\Http\Controllers\Api\Vendor\Concerns\AuthorizesVendorRoles;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\CompanyActivity;
@@ -13,6 +14,8 @@ use Illuminate\Support\Facades\DB;
 
 class CompanyController extends Controller
 {
+    use AuthorizesVendorRoles;
+
     public function show(Request $request): JsonResponse
     {
         $company = $request->user()->company;
@@ -25,6 +28,7 @@ class CompanyController extends Controller
 
     public function update(Request $request): JsonResponse
     {
+        $this->authorizeCompanyAdmin($request);
         $company = $request->user()->company;
         if (! $company || $company->type !== Company::TYPE_VENDOR) {
             return response()->json(['message' => 'Resource tidak ditemukan.'], 404);

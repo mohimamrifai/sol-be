@@ -23,6 +23,7 @@ class BookingContainer extends Model
         'volume_cbm',
         'cargo_description',
         'remark',
+        'cargo_category_id',
         'equipment_condition',
         'temperature',
         'is_dangerous_goods',
@@ -60,5 +61,10 @@ class BookingContainer extends Model
     public function dgClass(): BelongsTo
     {
         return $this->belongsTo(DgClass::class);
+    }
+
+    public function cargoCategory(): BelongsTo
+    {
+        return $this->belongsTo(CargoCategory::class);
     }
 }

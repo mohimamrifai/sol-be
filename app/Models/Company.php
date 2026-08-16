@@ -43,6 +43,7 @@ class Company extends Model
         'sales_pic_id',
         'account_manager_id',
         'review_notes',
+        'rejection_reason',
         'reviewed_at',
         'reviewed_by',
         'approved_at',

@@ -9,7 +9,9 @@ use App\Enums\AdminVendorPaymentRequestStatus;
 use App\Enums\VendorPaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Models\CompanyActivity;
+use App\Models\VendorInvoice;
 use App\Models\VendorPayment;
+use App\Models\VendorPaymentDocument;
 use App\Models\VendorPaymentRequest;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -78,6 +80,7 @@ class AdminVendorPaymentController extends Controller
             'vendorInvoice.jobOrders',
             'approvedByUser:id,name',
             'payments.paidByUser:id,name',
+            'documents.uploadedBy:id,name',
         ]);
 
         return response()->json(['data' => $this->transformDetail($vendorPaymentRequest)]);
@@ -218,6 +221,65 @@ class AdminVendorPaymentController extends Controller
         return response()->json(['message' => 'Pembayaran dicatat.', 'data' => $this->transformDetail($vendorPaymentRequest->fresh())]);
     }
 
+    public function storeDocument(Request $request, VendorPaymentRequest $vendorPaymentRequest): JsonResponse
+    {
+        $data = $request->validate([
+            'document_type' => 'required|in:other_document,tax_invoice',
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
+        ]);
+
+        $file = $request->file('file');
+        $path = $file->store('vendor-payments/'.$vendorPaymentRequest->id.'/documents', 'public');
+
+        if ($data['document_type'] === 'tax_invoice') {
+            $invoice = $vendorPaymentRequest->vendorInvoice;
+            if ($invoice) {
+                $invoice->update(['tax_invoice_path' => $path]);
+            }
+        }
+
+        $doc = VendorPaymentDocument::create([
+            'vendor_payment_request_id' => $vendorPaymentRequest->id,
+            'document_type' => $data['document_type'],
+            'file_path' => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type' => $file->getMimeType(),
+            'size' => $file->getSize(),
+            'uploaded_by' => $request->user()?->id,
+        ]);
+
+        $label = $data['document_type'] === 'tax_invoice' ? 'Tax Invoice' : 'Other Document';
+        $this->logActivity($vendorPaymentRequest, "{$label} diunggah.", $request->user()->id);
+
+        return response()->json(['message' => 'Dokumen diunggah.', 'data' => $this->transformPaymentDocument($doc)], 201);
+    }
+
+    public function downloadDocument(VendorPaymentRequest $vendorPaymentRequest, VendorPaymentDocument $document): JsonResponse
+    {
+        abort_unless($document->vendor_payment_request_id === $vendorPaymentRequest->id, 404);
+
+        return response()->json([
+            'data' => [
+                'url' => Storage::disk('public')->url($document->file_path),
+                'name' => $document->original_name,
+            ],
+        ]);
+    }
+
+    private function transformPaymentDocument(VendorPaymentDocument $doc): array
+    {
+        return [
+            'id' => $doc->id,
+            'document_type' => $doc->document_type,
+            'original_name' => $doc->original_name,
+            'mime_type' => $doc->mime_type,
+            'size' => $doc->size,
+            'url' => Storage::disk('public')->url($doc->file_path),
+            'uploaded_by' => $doc->uploadedBy?->name,
+            'created_at' => $doc->created_at?->toIso8601String(),
+        ];
+    }
+
     private function transformListRow(VendorPaymentRequest $req): array
     {
         $inv = $req->vendorInvoice;
@@ -269,6 +331,10 @@ class AdminVendorPaymentController extends Controller
             'vendor_category' => $snap['vendor_category'] ?? $inv?->vendor?->vendor_category,
             'vendor_types' => $snap['vendor_types'] ?? $inv?->vendor?->vendor_types,
             'tax_invoice_url' => $inv?->tax_invoice_path ? Storage::disk('public')->url($inv->tax_invoice_path) : null,
+            'other_documents' => $req->documents
+                ->where('document_type', 'other_document')
+                ->map(fn (VendorPaymentDocument $d) => $this->transformPaymentDocument($d))
+                ->values(),
             'can_print_voucher' => ($req->status?->value ?? $req->status) === AdminVendorPaymentRequestStatus::Paid->value,
             'invoice_date' => $inv?->invoice_date?->toDateString(),
             'due_date' => $inv?->due_date?->toDateString(),

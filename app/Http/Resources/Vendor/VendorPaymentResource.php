@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Resources\Vendor;
 
 use App\Models\VendorPayment;
+use App\Support\VendorShipmentHelper;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -38,6 +39,9 @@ class VendorPaymentResource extends JsonResource
                 'invoice_number' => $this->vendorInvoice->invoice_number,
                 'total_amount' => (float) $this->vendorInvoice->total_amount,
                 'shipment_id' => $this->vendorInvoice->shipment_id,
+                'jo_number' => $this->vendorInvoice->relationLoaded('shipment') && $this->vendorInvoice->shipment
+                    ? VendorShipmentHelper::joNumber($this->vendorInvoice->shipment)
+                    : null,
             ]),
             'created_at' => $this->created_at?->toIso8601String(),
         ];
