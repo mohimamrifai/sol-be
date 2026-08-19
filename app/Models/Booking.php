@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\DocumentNumberService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -95,7 +96,7 @@ class Booking extends Model
     {
         static::creating(function (Booking $booking) {
             if (empty($booking->booking_number)) {
-                $booking->booking_number = 'BK-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
+                $booking->booking_number = app(DocumentNumberService::class)->generate('BK');
             }
         });
     }

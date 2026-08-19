@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Enums\VendorJobOrderService;
 use App\Enums\VendorJobOrderStatus;
+use App\Services\DocumentNumberService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -60,9 +61,7 @@ class VendorJobOrder extends Model
 
     public static function generateNumber(): string
     {
-        $max = (int) (self::max('id') ?? 0) + 1;
-
-        return 'JO-'.str_pad((string) $max, 5, '0', STR_PAD_LEFT);
+        return app(DocumentNumberService::class)->generate('JO');
     }
 
     public function shipment(): BelongsTo

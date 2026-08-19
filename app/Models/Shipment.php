@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\DocumentNumberService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -91,7 +92,7 @@ class Shipment extends Model
                 $shipment->shipment_no = (int) (self::max('shipment_no') ?? 0) + 1;
             }
             if (empty($shipment->shipment_number)) {
-                $shipment->shipment_number = self::formatShipmentNo((int) $shipment->shipment_no);
+                $shipment->shipment_number = app(DocumentNumberService::class)->generate('SHP');
             }
             if (empty($shipment->waybill_number)) {
                 $shipment->waybill_number = 'CN-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));

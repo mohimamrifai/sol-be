@@ -23,9 +23,9 @@ class VendorSeeder extends Seeder
 
         $jkt = Location::query()->where('code', 'JKT')->first();
         $sub = Location::query()->where('code', 'SUB')->first();
-        $roadMode = TransportMode::query()->where('code', 'road')->first()
+        $roadMode = TransportMode::query()->where('code', 'TRUCK')->first()
             ?? TransportMode::query()->first();
-        $railMode = TransportMode::query()->where('code', 'rail')->first()
+        $railMode = TransportMode::query()->where('code', 'RAIL')->first()
             ?? TransportMode::query()->first();
         $containerType = ContainerType::query()->first();
 

@@ -54,7 +54,9 @@ class CustomerRegistrationService
                 'contact_person' => $data['admin_name'],
                 'status' => 'pending',
                 'payment_type' => 'prepaid',
-                'billing_cycle' => 'end_of_month',
+                'billing_type' => 'prepaid',
+                'billing_cycle' => null,
+                'payment_term' => null,
             ]);
 
             $user = User::create([

@@ -45,7 +45,7 @@ use Illuminate\Support\Str;
  *
  * Menghasilkan data demo untuk role customer (company_admin, ops_pic, finance_pic, viewer)
  * dengan cakupan semua status & state penting pada modul:
- *  - Company Profile (info + commercial + documents + activities)
+ *  - Company Profile (info + commercial FSD: per_shipment/semi_monthly/monthly, net_XX + documents + activities)
  *  - Locations (head office, branch, warehouse, dengan activities)
  *  - Users (admin, ops, finance, viewer)
  *  - Bookings   (draft, submitted, approved, rejected)
@@ -107,7 +107,12 @@ class CustomerDemoSeeder extends Seeder
 
         $vendorCompany = $this->seedVendorCompany();
         $vendorUsers = $this->seedVendorUsers($vendorCompany);
-        $vendorJobOrders = $this->seedVendorJobOrders($mainCompany, $vendorCompany, $vendorUsers);
+        $vendorJobOrders = $this->seedVendorJobOrders(
+            $mainCompany,
+            $vendorCompany,
+            $vendorUsers,
+            $bookings->filter(fn (Booking $b) => $b->status === Booking::STATUS_APPROVED)->values()
+        );
         $this->seedVendorInvoices($vendorCompany, $vendorJobOrders, $vendorUsers);
         $this->seedVendorProgressUpdates($vendorJobOrders, $vendorUsers);
 
@@ -180,7 +185,6 @@ class CustomerDemoSeeder extends Seeder
             'district' => 'Kebayoran Baru',
             'postal_code' => '12190',
             'business_category' => 'manufacturing',
-            'business_category_other' => 'Manufaktur',
             'monthly_shipment_estimate' => '50_to_100',
             'website' => 'https://www.abc-indonesia.co.id',
             'contact_person' => 'Andi Wijaya',
@@ -190,13 +194,13 @@ class CustomerDemoSeeder extends Seeder
             'billing_type' => 'postpaid',
             'pricing_type' => 'standard',
             'discount_percent' => 5.00,
-            'billing_cycle' => 'end_of_month',
-            'payment_term' => 'net_14',
+            'billing_cycle' => 'monthly',
+            'payment_term' => 'net_30',
             'credit_limit' => 50000000,
             'current_deposit_balance' => 2500000,
             'outstanding_balance' => 0,
             'payment_type' => 'postpaid',
-            'postpaid_term_days' => 14,
+            'postpaid_term_days' => 30,
             'manual_payment_enabled' => true,
             'bank_name' => 'BCA',
             'bank_account_number' => '123-456-7890',
@@ -220,7 +224,6 @@ class CustomerDemoSeeder extends Seeder
             'district' => 'Coblong',
             'postal_code' => '40112',
             'business_category' => 'distributor',
-            'business_category_other' => 'Distribusi',
             'monthly_shipment_estimate' => '10_to_50',
             'website' => 'https://www.sembilan-jaya.co.id',
             'contact_person' => 'Rina Kartika',
@@ -230,13 +233,13 @@ class CustomerDemoSeeder extends Seeder
             'billing_type' => 'prepaid',
             'pricing_type' => 'discount',
             'discount_percent' => 2.50,
-            'billing_cycle' => 'half_monthly_1',
-            'payment_term' => 'cod',
+            'billing_cycle' => null,
+            'payment_term' => null,
             'credit_limit' => 0,
             'current_deposit_balance' => 1000000,
             'outstanding_balance' => 0,
-            'payment_type' => 'postpaid',
-            'postpaid_term_days' => 30,
+            'payment_type' => 'prepaid',
+            'postpaid_term_days' => null,
             'manual_payment_enabled' => true,
             'bank_name' => 'Mandiri',
             'bank_account_number' => '987-654-3210',
@@ -893,7 +896,7 @@ class CustomerDemoSeeder extends Seeder
                 'name' => $company->name,
                 'address' => $company->address,
                 'npwp' => $company->npwp,
-                'payment_terms' => ($company->postpaid_term_days ?? 14).' days',
+                'payment_terms' => self::paymentTermLabel($company->payment_term, $company->postpaid_term_days),
             ],
             'shipment_snapshot' => $shipment ? [
                 'shipment_no' => $shipment->shipment_number,
@@ -1124,7 +1127,6 @@ class CustomerDemoSeeder extends Seeder
             'postal_code' => '12950',
             'service_categories' => ['trucking', 'warehouse', 'rail_handling'],
             'business_category' => 'logistics',
-            'business_category_other' => 'Jasa Logistik & Transportasi',
             'monthly_shipment_estimate' => '50_to_100',
             'website' => 'https://www.mitra-logistik.co.id',
             'contact_person' => 'Hendro Wibowo',
@@ -1170,7 +1172,7 @@ class CustomerDemoSeeder extends Seeder
         return $user;
     }
 
-    private function seedVendorJobOrders(Company $customer, Company $vendor, Collection $vendorUsers): Collection
+    private function seedVendorJobOrders(Company $customer, Company $vendor, Collection $vendorUsers, Collection $approvedBookings): Collection
     {
         $modes = TransportMode::orderBy('id')->get();
         $serviceTypes = ServiceType::orderBy('id')->get();
@@ -1182,109 +1184,48 @@ class CustomerDemoSeeder extends Seeder
         $vendorAdmin = $vendorUsers->firstWhere('email', 'admin@vendor.test');
         $ops1 = $vendorUsers->firstWhere('email', 'ops1@vendor.test');
 
+        $statuses = [
+            'pending_acceptance',
+            'accepted',
+            'in_progress',
+            'waiting_verification',
+            'completed',
+            'completed',
+        ];
+
         $jobOrders = collect();
 
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $vendorAdmin,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'pending_acceptance',
-        ]));
+        foreach ($statuses as $index => $vendorStatus) {
+            $booking = $approvedBookings[$index % max(1, $approvedBookings->count())] ?? null;
+            if (! $booking) {
+                break;
+            }
 
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $vendorAdmin,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'accepted',
-        ]));
-
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $ops1,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'in_progress',
-        ]));
-
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $ops1,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'waiting_verification',
-        ]));
-
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $ops1,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'completed',
-        ]));
-
-        $jobOrders->push($this->makeVendorJobOrder([
-            'customer' => $customer,
-            'vendor' => $vendor,
-            'creator' => $ops1,
-            'origin' => $origin,
-            'destination' => $destination,
-            'service' => $serviceFcl,
-            'mode' => $rail,
-            'vendor_status' => 'completed',
-        ]));
+            $jobOrders->push($this->makeVendorJobOrder([
+                'booking' => $booking,
+                'customer' => $customer,
+                'vendor' => $vendor,
+                'creator' => in_array($vendorStatus, ['pending_acceptance', 'accepted'], true) ? $vendorAdmin : $ops1,
+                'origin' => $origin,
+                'destination' => $destination,
+                'service' => $serviceFcl,
+                'mode' => $rail,
+                'vendor_status' => $vendorStatus,
+            ]));
+        }
 
         return $jobOrders;
     }
 
     private function makeVendorJobOrder(array $params): Shipment
     {
+        $booking = $params['booking'];
         $customer = $params['customer'];
         $vendor = $params['vendor'];
         $creator = $params['creator'];
         $status = $params['vendor_status'];
 
-        $booking = Booking::firstOrCreate(
-            [
-                'booking_number' => 'VJOB-'.$vendor->id.'-'.now()->format('Ymd').'-'.str_pad((string) (Booking::max('id') + 1), 4, '0', STR_PAD_LEFT),
-            ],
-            [
-                'company_id' => $customer->id,
-                'user_id' => $creator->id,
-                'origin_location_id' => $params['origin']->id,
-                'destination_location_id' => $params['destination']->id,
-                'service_type_id' => $params['service']->id,
-                'transport_mode_id' => $params['mode']->id,
-                'shipment_coverage' => 'door_to_door',
-                'status' => 'approved',
-                'shipper_name' => 'Shipper '.$customer->name,
-                'shipper_address' => $customer->address ?? 'Alamat pengirim',
-                'shipper_phone' => $customer->phone ?? '0810000000',
-                'consignee_name' => 'Consignee '.$vendor->name,
-                'consignee_address' => $vendor->address ?? 'Alamat penerima',
-                'consignee_phone' => $vendor->phone ?? '0820000000',
-            ]
-        );
-
         $shipment = Shipment::create([
-            'shipment_no' => (int) (Shipment::max('id') + 1),
-            'shipment_number' => 'JO-'.now()->format('Ymd').'-'.str_pad((string) (Shipment::max('id') + 1), 4, '0', STR_PAD_LEFT),
             'booking_id' => $booking->id,
             'company_id' => $customer->id,
             'vendor_company_id' => $vendor->id,
@@ -1292,11 +1233,11 @@ class CustomerDemoSeeder extends Seeder
             'accepted_at' => in_array($status, ['accepted', 'in_progress', 'waiting_verification', 'completed'], true) ? now()->subDays(2) : null,
             'completion_submitted_at' => in_array($status, ['waiting_verification', 'completed'], true) ? now()->subDay() : null,
             'completion_verified_at' => $status === 'completed' ? now() : null,
-            'origin_location_id' => $params['origin']->id ?? null,
-            'destination_location_id' => $params['destination']->id ?? null,
-            'transport_mode_id' => $params['mode']->id ?? null,
-            'service_type_id' => $params['service']->id ?? null,
-            'shipment_coverage' => 'door_to_door',
+            'origin_location_id' => $params['origin']->id ?? $booking->origin_location_id,
+            'destination_location_id' => $params['destination']->id ?? $booking->destination_location_id,
+            'transport_mode_id' => $params['mode']->id ?? $booking->transport_mode_id,
+            'service_type_id' => $params['service']->id ?? $booking->service_type_id,
+            'shipment_coverage' => $booking->shipment_coverage ?? 'door_to_door',
             'status' => match ($status) {
                 'pending_acceptance' => 'created',
                 'accepted', 'in_progress' => 'cargo_received',
@@ -1446,6 +1387,7 @@ class CustomerDemoSeeder extends Seeder
                 'billing_cycle' => 'monthly',
                 'credit_limit' => 100000000,
                 'outstanding_balance' => 15000000,
+                'postpaid_term_days' => 30,
             ]);
         }
 
@@ -1454,7 +1396,7 @@ class CustomerDemoSeeder extends Seeder
             'name' => 'PT Menunggu Review',
             'business_entity_type' => 'PT',
             'company_code' => 'PND',
-            'npwp' => '03.456.789.0-123.000',
+            'npwp' => '05.678.901.2-345.000',
             'email' => 'pending@customer.test',
             'phone' => '0215550100',
             'address' => 'Jl. Pending No. 1',
@@ -1464,6 +1406,9 @@ class CustomerDemoSeeder extends Seeder
             'status' => 'pending',
             'billing_type' => 'prepaid',
             'pricing_type' => 'standard',
+            'payment_type' => 'prepaid',
+            'billing_cycle' => null,
+            'payment_term' => null,
         ]);
 
         CustomerLocation::create([
@@ -1497,9 +1442,24 @@ class CustomerDemoSeeder extends Seeder
             'billing_type' => 'postpaid',
             'pricing_type' => 'discount',
             'discount_percent' => 5,
+            'payment_type' => 'postpaid',
             'payment_term' => 'net_14',
             'billing_cycle' => 'semi_monthly',
             'credit_limit' => 50000000,
+            'postpaid_term_days' => 14,
         ]);
+    }
+
+    private static function paymentTermLabel(?string $paymentTerm, ?int $postpaidTermDays): string
+    {
+        return match ($paymentTerm) {
+            'cod' => 'COD',
+            'net_7' => 'Net 7',
+            'net_14' => 'Net 14',
+            'net_30' => 'Net 30',
+            'net_45' => 'Net 45',
+            'net_60' => 'Net 60',
+            default => $postpaidTermDays !== null ? "{$postpaidTermDays} days" : '—',
+        };
     }
 }

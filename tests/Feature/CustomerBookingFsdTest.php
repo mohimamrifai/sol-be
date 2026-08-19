@@ -14,6 +14,7 @@ use App\Models\ServiceType;
 use App\Models\TransportMode;
 use App\Models\User;
 use Database\Seeders\MasterDataSeeder;
+use Database\Seeders\NumberingFormatSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -117,6 +118,7 @@ class CustomerBookingFsdTest extends TestCase
 
     public function test_draft_save_generates_booking_number_and_uses_customer_location(): void
     {
+        $this->seed(NumberingFormatSeeder::class);
         Sanctum::actingAs($this->admin);
 
         $payload = $this->basePayload(isDraft: true);
@@ -127,6 +129,10 @@ class CustomerBookingFsdTest extends TestCase
         $booking = Booking::findOrFail($bookingId);
 
         $this->assertNotEmpty($booking->booking_number);
+        $this->assertMatchesRegularExpression(
+            '/^BK-'.now()->format('Ym').'-\d{5}$/',
+            $booking->booking_number
+        );
         $this->assertSame('draft', $booking->status);
         $this->assertSame($this->shipperLocation->id, $booking->shipper_location_id);
         $this->assertNotNull($booking->shipper_snapshot);
