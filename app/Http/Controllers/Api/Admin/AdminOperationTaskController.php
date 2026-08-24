@@ -240,6 +240,7 @@ class AdminOperationTaskController extends Controller
         $isFcl = str_contains($serviceCode, 'fcl');
         $items = $shipment?->items?->map(fn ($item) => [
             'description' => $item->description,
+            'name' => $item->name,
             'quantity' => $item->quantity,
             'gross_weight' => $item->gross_weight,
             'cbm' => $item->cbm,

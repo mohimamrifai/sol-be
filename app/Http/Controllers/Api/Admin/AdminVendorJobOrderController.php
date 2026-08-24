@@ -44,7 +44,7 @@ class AdminVendorJobOrderController extends Controller
         $query = VendorJobOrder::query()
             ->with([
                 'vendor:id,name,code',
-                'shipment:id,shipment_number',
+                'shipment:id,shipment_number,origin_location_id,destination_location_id',
                 'shipment.originLocation:id,code,name',
                 'shipment.destinationLocation:id,code,name',
             ]);
@@ -226,10 +226,12 @@ class AdminVendorJobOrderController extends Controller
 
     private function transformListRow(VendorJobOrder $jo): array
     {
+        $snap = $jo->shipment_snapshot ?? [];
         $origin = $jo->shipment?->originLocation;
         $dest = $jo->shipment?->destinationLocation;
-        $route = [($origin?->code ?? $origin?->name), ($dest?->code ?? $dest?->name)];
-        $routeLabel = implode(' → ', array_filter($route)) ?: '—';
+        $originLabel = $origin?->code ?? $origin?->name ?? $snap['origin'] ?? null;
+        $destLabel = $dest?->code ?? $dest?->name ?? $snap['destination'] ?? null;
+        $routeLabel = implode(' → ', array_filter([$originLabel, $destLabel])) ?: '—';
 
         return [
             'id' => $jo->id,
@@ -251,6 +253,8 @@ class AdminVendorJobOrderController extends Controller
     {
         $snap = $jo->shipment_snapshot ?? [];
         $vendorSnap = $jo->vendor_snapshot ?? [];
+        $origin = $jo->shipment?->originLocation;
+        $dest = $jo->shipment?->destinationLocation;
 
         return array_merge($this->transformListRow($jo), [
             'vendor_code' => $vendorSnap['code'] ?? $jo->vendor?->code,
@@ -258,8 +262,8 @@ class AdminVendorJobOrderController extends Controller
             'vendor_mobile' => $vendorSnap['pic_mobile'] ?? null,
             'consignment_note' => $snap['waybill_number'] ?? $jo->shipment?->waybill_number,
             'customer' => $snap['customer'] ?? $jo->shipment?->company?->name,
-            'origin' => $snap['origin'] ?? null,
-            'destination' => $snap['destination'] ?? null,
+            'origin' => $snap['origin'] ?? $origin?->name ?? $origin?->code,
+            'destination' => $snap['destination'] ?? $dest?->name ?? $dest?->code,
             'shipment_coverage' => $snap['shipment_coverage'] ?? $jo->shipment?->shipment_coverage,
             'pickup_address' => $jo->pickup_address,
             'pickup_date' => $jo->pickup_date?->toIso8601String(),

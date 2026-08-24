@@ -2,6 +2,8 @@
 
 namespace Database\Seeders;
 
+use App\Enums\VendorJobOrderService;
+use App\Enums\VendorJobOrderStatus;
 use App\Enums\CompanyDocumentType;
 use App\Enums\LocationStatus;
 use App\Enums\LocationType;
@@ -29,7 +31,10 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentTracking;
 use App\Models\TransportMode;
 use App\Models\User;
+use App\Models\Vendor;
 use App\Models\VendorInvoice;
+use App\Models\VendorJobOrder;
+use App\Models\VendorJobOrderActivity;
 use App\Models\VendorPayment;
 use App\Models\VendorProgressUpdate;
 use App\Services\LocationCodeService;
@@ -103,6 +108,8 @@ class CustomerDemoSeeder extends Seeder
 
         $bookings = $this->seedBookings($mainCompany, $customerUsers);
         $this->seedShipments($bookings, $customerUsers);
+        $internalOps = User::query()->where('email', 'operations@demo.internal.sol.test')->first();
+        $this->seedAdminVendorJobOrders($mainCompany, $internalOps ?? $admin);
         $this->seedInvoices($bookings, $customerUsers);
 
         $vendorCompany = $this->seedVendorCompany();
@@ -120,12 +127,19 @@ class CustomerDemoSeeder extends Seeder
 
         $this->command?->info('Customer demo data seeded: 1 main company + 4 PIC users + 4 locations + 2 documents + activities.');
         $this->command?->info('Phase 2 admin: pending/suspended customers + review fields.');
-        $this->command?->info('Vendor demo data seeded: 1 vendor company + 5 vendor users + 5 job orders + vendor invoices.');
+        $this->command?->info('Vendor demo data seeded: 1 vendor company + 5 vendor users + 6 portal job orders + vendor invoices.');
+        $this->command?->info('Admin vendor job orders seeded on vendor_job_orders table (requires VendorSeeder).');
     }
 
     private function truncateCustomerData(): void
     {
         $tables = [
+            'vendor_payment_documents',
+            'vendor_payment_requests',
+            'vendor_invoice_job_orders',
+            'vendor_job_order_documents',
+            'vendor_job_order_activities',
+            'vendor_job_orders',
             'vendor_invoice_attachments',
             'vendor_payments',
             'vendor_invoices',
@@ -1265,6 +1279,93 @@ class CustomerDemoSeeder extends Seeder
         }
 
         return $shipment;
+    }
+
+    /**
+     * Admin FSD vendor job orders (tabel vendor_job_orders + Vendor master).
+     * Berbeda dari portal vendor yang memakai Shipment.vendor_company_id.
+     */
+    private function seedAdminVendorJobOrders(Company $customer, ?User $actor): void
+    {
+        $vendors = Vendor::query()->where('is_active', true)->orderBy('id')->get();
+        if ($vendors->isEmpty()) {
+            $this->command?->warn('Admin vendor job orders skipped: no vendors in vendors table. Run VendorSeeder first.');
+
+            return;
+        }
+
+        $shipments = Shipment::query()
+            ->where('company_id', $customer->id)
+            ->whereNull('vendor_company_id')
+            ->with(['originLocation:id,name,code', 'destinationLocation:id,name,code'])
+            ->orderBy('id')
+            ->limit(8)
+            ->get();
+
+        if ($shipments->isEmpty()) {
+            $this->command?->warn('Admin vendor job orders skipped: no customer shipments found.');
+
+            return;
+        }
+
+        $statuses = [
+            VendorJobOrderStatus::Draft,
+            VendorJobOrderStatus::Sent,
+            VendorJobOrderStatus::InProgress,
+            VendorJobOrderStatus::Completed,
+            VendorJobOrderStatus::Cancelled,
+        ];
+
+        $services = [
+            VendorJobOrderService::Pickup,
+            VendorJobOrderService::Delivery,
+            VendorJobOrderService::Rail,
+        ];
+
+        foreach ($shipments->take(5)->values() as $index => $shipment) {
+            $vendor = $vendors[$index % $vendors->count()];
+            $status = $statuses[$index % count($statuses)];
+            $service = $services[$index % count($services)];
+
+            $jo = VendorJobOrder::create([
+                'shipment_id' => $shipment->id,
+                'vendor_id' => $vendor->id,
+                'service_type' => $service->value,
+                'status' => $status->value,
+                'vendor_rate' => 2_500_000 + ($index * 500_000),
+                'additional_cost' => $index % 2 === 0 ? 150_000 : 0,
+                'vendor_snapshot' => [
+                    'name' => $vendor->name,
+                    'code' => $vendor->code,
+                ],
+                'shipment_snapshot' => [
+                    'shipment_number' => $shipment->shipment_number,
+                    'customer' => $customer->name,
+                    'origin' => $shipment->originLocation?->code ?? $shipment->originLocation?->name,
+                    'destination' => $shipment->destinationLocation?->code ?? $shipment->destinationLocation?->name,
+                    'shipment_coverage' => $shipment->shipment_coverage,
+                ],
+                'pickup_address' => $shipment->originLocation?->name,
+                'delivery_address' => $shipment->destinationLocation?->name,
+                'sent_at' => in_array($status, [VendorJobOrderStatus::Sent, VendorJobOrderStatus::InProgress, VendorJobOrderStatus::Completed], true)
+                    ? now()->subDays(3)
+                    : null,
+                'completed_at' => $status === VendorJobOrderStatus::Completed ? now()->subDay() : null,
+                'created_by' => $actor?->id,
+            ]);
+
+            VendorJobOrderActivity::create([
+                'vendor_job_order_id' => $jo->id,
+                'user_id' => $actor?->id,
+                'activity' => match ($status) {
+                    VendorJobOrderStatus::Draft => 'Job order dibuat (draft).',
+                    VendorJobOrderStatus::Sent => 'Job order dikirim ke vendor.',
+                    VendorJobOrderStatus::InProgress => 'Vendor sedang mengerjakan job order.',
+                    VendorJobOrderStatus::Completed => 'Job order selesai.',
+                    VendorJobOrderStatus::Cancelled => 'Job order dibatalkan.',
+                },
+            ]);
+        }
     }
 
     private function seedVendorInvoices(Company $vendor, Collection $jobOrders, Collection $vendorUsers): void
