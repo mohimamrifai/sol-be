@@ -7,12 +7,15 @@ use App\Models\CargoCategory;
 use App\Models\ContainerAsset;
 use App\Models\ContainerType;
 use App\Models\Location;
+use App\Models\Route;
 use App\Models\ServiceType;
 use App\Models\Station;
 use App\Models\Train;
 use App\Models\TrainCar;
+use App\Models\TrainSchedule;
 use App\Models\TransportMode;
 use App\Models\Yard;
+use App\Enums\TrainScheduleStatus;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -28,6 +31,10 @@ class MasterDataSeeder extends Seeder
         $this->seedAdditionalServices();
         $this->seedTrains();
         $this->seedCargoCategories();
+        $this->seedStations();
+        $this->seedYards();
+        $this->seedRoutes();
+        $this->seedTrainSchedules();
         $this->seedContainerAssets();
     }
 
@@ -160,35 +167,35 @@ class MasterDataSeeder extends Seeder
     private function seedContainerTypes(): void
     {
         $rows = [
-            ['name' => 'Container 20ft Standard', 'size' => '20ft', 'capacity_weight' => 21770, 'capacity_cbm' => 33.2, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => 'Container 40ft Standard', 'size' => '40ft', 'capacity_weight' => 26680, 'capacity_cbm' => 67.7, 'length' => 1203, 'width' => 235, 'height' => 239],
-            ['name' => '40ft High Cube', 'size' => '40HC', 'capacity_weight' => 26500, 'capacity_cbm' => 76.3, 'length' => 1203, 'width' => 235, 'height' => 269],
-            ['name' => '45ft High Cube', 'size' => '45HC', 'capacity_weight' => 27800, 'capacity_cbm' => 86.0, 'length' => 1356, 'width' => 235, 'height' => 269],
-            ['name' => '20ft Open Top', 'size' => '20OT', 'capacity_weight' => 21000, 'capacity_cbm' => 32.5, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '40ft Open Top', 'size' => '40OT', 'capacity_weight' => 26000, 'capacity_cbm' => 65.0, 'length' => 1203, 'width' => 235, 'height' => 239],
-            ['name' => '20ft Flat Rack', 'size' => '20FR', 'capacity_weight' => 28000, 'capacity_cbm' => 28.0, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '40ft Flat Rack', 'size' => '40FR', 'capacity_weight' => 40000, 'capacity_cbm' => 52.0, 'length' => 1203, 'width' => 235, 'height' => 239],
-            ['name' => '20ft Reefer', 'size' => '20RF', 'capacity_weight' => 20400, 'capacity_cbm' => 28.3, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '40ft Reefer', 'size' => '40RF', 'capacity_weight' => 25000, 'capacity_cbm' => 67.3, 'length' => 1203, 'width' => 235, 'height' => 269],
-            ['name' => '20ft Tank', 'size' => '20TK', 'capacity_weight' => 24000, 'capacity_cbm' => 24.0, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '10ft Mini', 'size' => '10ft', 'capacity_weight' => 10160, 'capacity_cbm' => 15.9, 'length' => 299, 'width' => 235, 'height' => 239],
-            ['name' => '53ft Domestic', 'size' => '53ft', 'capacity_weight' => 20000, 'capacity_cbm' => 110.0, 'length' => 1610, 'width' => 244, 'height' => 274],
-            ['name' => '20ft Hard Top', 'size' => '20HT', 'capacity_weight' => 21500, 'capacity_cbm' => 31.0, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '40ft Hard Top', 'size' => '40HT', 'capacity_weight' => 26200, 'capacity_cbm' => 64.0, 'length' => 1203, 'width' => 235, 'height' => 239],
-            ['name' => '20ft Platform', 'size' => '20PL', 'capacity_weight' => 24000, 'capacity_cbm' => 0, 'length' => 590, 'width' => 235, 'height' => 50],
-            ['name' => '40ft Platform', 'size' => '40PL', 'capacity_weight' => 40000, 'capacity_cbm' => 0, 'length' => 1203, 'width' => 235, 'height' => 50],
-            ['name' => '20ft Bulk', 'size' => '20BK', 'capacity_weight' => 25000, 'capacity_cbm' => 35.0, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => 'Air ULD LD3', 'size' => 'LD3', 'capacity_weight' => 1588, 'capacity_cbm' => 4.3, 'length' => 156, 'width' => 153, 'height' => 163],
-            ['name' => 'Air ULD LD7', 'size' => 'LD7', 'capacity_weight' => 3500, 'capacity_cbm' => 10.5, 'length' => 318, 'width' => 244, 'height' => 163],
-            ['name' => 'Air ULD PMC', 'size' => 'PMC', 'capacity_weight' => 6800, 'capacity_cbm' => 17.5, 'length' => 318, 'width' => 244, 'height' => 163],
-            ['name' => 'Half Height 20ft', 'size' => '20HH', 'capacity_weight' => 28000, 'capacity_cbm' => 14.0, 'length' => 590, 'width' => 235, 'height' => 145],
-            ['name' => 'Garmentainer 40ft', 'size' => '40GOH', 'capacity_weight' => 22000, 'capacity_cbm' => 67.0, 'length' => 1203, 'width' => 235, 'height' => 269],
-            ['name' => '20ft Side Door', 'size' => '20SD', 'capacity_weight' => 21000, 'capacity_cbm' => 32.0, 'length' => 590, 'width' => 235, 'height' => 239],
-            ['name' => '40ft Double Door', 'size' => '40DD', 'capacity_weight' => 25800, 'capacity_cbm' => 67.0, 'length' => 1203, 'width' => 235, 'height' => 239],
+            ['name' => 'Container 20ft Standard', 'size' => '20ft', 'category' => 'dry', 'capacity_weight' => 21770, 'capacity_cbm' => 33.2, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => 'Container 40ft Standard', 'size' => '40ft', 'category' => 'dry', 'capacity_weight' => 26680, 'capacity_cbm' => 67.7, 'length' => 1203, 'width' => 235, 'height' => 239],
+            ['name' => '40ft High Cube', 'size' => '40HC', 'category' => 'high_cube', 'capacity_weight' => 26500, 'capacity_cbm' => 76.3, 'length' => 1203, 'width' => 235, 'height' => 269],
+            ['name' => '45ft High Cube', 'size' => '45HC', 'category' => 'high_cube', 'capacity_weight' => 27800, 'capacity_cbm' => 86.0, 'length' => 1356, 'width' => 235, 'height' => 269],
+            ['name' => '20ft Open Top', 'size' => '20OT', 'category' => 'open_top', 'capacity_weight' => 21000, 'capacity_cbm' => 32.5, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '40ft Open Top', 'size' => '40OT', 'category' => 'open_top', 'capacity_weight' => 26000, 'capacity_cbm' => 65.0, 'length' => 1203, 'width' => 235, 'height' => 239],
+            ['name' => '20ft Flat Rack', 'size' => '20FR', 'category' => 'flat_rack', 'capacity_weight' => 28000, 'capacity_cbm' => 28.0, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '40ft Flat Rack', 'size' => '40FR', 'category' => 'flat_rack', 'capacity_weight' => 40000, 'capacity_cbm' => 52.0, 'length' => 1203, 'width' => 235, 'height' => 239],
+            ['name' => '20ft Reefer', 'size' => '20RF', 'category' => 'reefer', 'capacity_weight' => 20400, 'capacity_cbm' => 28.3, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '40ft Reefer', 'size' => '40RF', 'category' => 'reefer', 'capacity_weight' => 25000, 'capacity_cbm' => 67.3, 'length' => 1203, 'width' => 235, 'height' => 269],
+            ['name' => '20ft Tank', 'size' => '20TK', 'category' => 'tank', 'capacity_weight' => 24000, 'capacity_cbm' => 24.0, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '10ft Mini', 'size' => '10ft', 'category' => 'dry', 'capacity_weight' => 10160, 'capacity_cbm' => 15.9, 'length' => 299, 'width' => 235, 'height' => 239],
+            ['name' => '53ft Domestic', 'size' => '53ft', 'category' => 'high_cube', 'capacity_weight' => 20000, 'capacity_cbm' => 110.0, 'length' => 1610, 'width' => 244, 'height' => 274],
+            ['name' => '20ft Hard Top', 'size' => '20HT', 'category' => 'dry', 'capacity_weight' => 21500, 'capacity_cbm' => 31.0, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '40ft Hard Top', 'size' => '40HT', 'category' => 'dry', 'capacity_weight' => 26200, 'capacity_cbm' => 64.0, 'length' => 1203, 'width' => 235, 'height' => 239],
+            ['name' => '20ft Platform', 'size' => '20PL', 'category' => 'flat_rack', 'capacity_weight' => 24000, 'capacity_cbm' => 0, 'length' => 590, 'width' => 235, 'height' => 50],
+            ['name' => '40ft Platform', 'size' => '40PL', 'category' => 'flat_rack', 'capacity_weight' => 40000, 'capacity_cbm' => 0, 'length' => 1203, 'width' => 235, 'height' => 50],
+            ['name' => '20ft Bulk', 'size' => '20BK', 'category' => 'other', 'capacity_weight' => 25000, 'capacity_cbm' => 35.0, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => 'Air ULD LD3', 'size' => 'LD3', 'category' => 'other', 'capacity_weight' => 1588, 'capacity_cbm' => 4.3, 'length' => 156, 'width' => 153, 'height' => 163],
+            ['name' => 'Air ULD LD7', 'size' => 'LD7', 'category' => 'other', 'capacity_weight' => 3500, 'capacity_cbm' => 10.5, 'length' => 318, 'width' => 244, 'height' => 163],
+            ['name' => 'Air ULD PMC', 'size' => 'PMC', 'category' => 'other', 'capacity_weight' => 6800, 'capacity_cbm' => 17.5, 'length' => 318, 'width' => 244, 'height' => 163],
+            ['name' => 'Half Height 20ft', 'size' => '20HH', 'category' => 'other', 'capacity_weight' => 28000, 'capacity_cbm' => 14.0, 'length' => 590, 'width' => 235, 'height' => 145],
+            ['name' => 'Garmentainer 40ft', 'size' => '40GOH', 'category' => 'high_cube', 'capacity_weight' => 22000, 'capacity_cbm' => 67.0, 'length' => 1203, 'width' => 235, 'height' => 269],
+            ['name' => '20ft Side Door', 'size' => '20SD', 'category' => 'dry', 'capacity_weight' => 21000, 'capacity_cbm' => 32.0, 'length' => 590, 'width' => 235, 'height' => 239],
+            ['name' => '40ft Double Door', 'size' => '40DD', 'category' => 'dry', 'capacity_weight' => 25800, 'capacity_cbm' => 67.0, 'length' => 1203, 'width' => 235, 'height' => 239],
         ];
 
         foreach ($rows as $row) {
-            ContainerType::firstOrCreate(['size' => $row['size']], array_merge($row, ['is_active' => true]));
+            ContainerType::updateOrCreate(['size' => $row['size']], array_merge($row, ['is_active' => true]));
         }
     }
 
@@ -281,6 +288,235 @@ class MasterDataSeeder extends Seeder
         }
     }
 
+    private function seedStations(): void
+    {
+        if (! Schema::hasTable('stations')) {
+            return;
+        }
+
+        $rows = [
+            ['code' => 'STN-JKT', 'name' => 'Jakarta Gambir', 'business_entity' => 'company', 'city' => 'Jakarta', 'province' => 'DKI Jakarta', 'status' => 'active'],
+            ['code' => 'STN-SBY', 'name' => 'Surabaya Pasarturi', 'business_entity' => 'company', 'city' => 'Surabaya', 'province' => 'Jawa Timur', 'status' => 'active'],
+            ['code' => 'STN-SMG', 'name' => 'Semarang Tawang', 'business_entity' => 'company', 'city' => 'Semarang', 'province' => 'Jawa Tengah', 'status' => 'active'],
+            ['code' => 'STN-BDG', 'name' => 'Bandung', 'business_entity' => 'company', 'city' => 'Bandung', 'province' => 'Jawa Barat', 'status' => 'active'],
+            ['code' => 'STN-CKG', 'name' => 'Cikarang Hub', 'business_entity' => 'company', 'city' => 'Cikarang', 'province' => 'Jawa Barat', 'status' => 'active'],
+            ['code' => 'STN-MLG', 'name' => 'Malang', 'business_entity' => 'company', 'city' => 'Malang', 'province' => 'Jawa Timur', 'status' => 'inactive'],
+            ['code' => 'STN-SOC', 'name' => 'Solo Balapan', 'business_entity' => 'company', 'city' => 'Surakarta', 'province' => 'Jawa Tengah', 'status' => 'active'],
+            ['code' => 'STN-CBN', 'name' => 'Cirebon', 'business_entity' => 'company', 'city' => 'Cirebon', 'province' => 'Jawa Barat', 'status' => 'active'],
+        ];
+
+        foreach ($rows as $row) {
+            Station::updateOrCreate(['code' => $row['code']], $row);
+        }
+    }
+
+    private function seedYards(): void
+    {
+        if (! Schema::hasTable('yards')) {
+            return;
+        }
+
+        $stations = Station::query()->pluck('id', 'code');
+
+        $rows = [
+            ['code' => 'YRD-SBY-ORG', 'name' => 'Surabaya Origin Yard', 'station_code' => 'STN-SBY', 'yard_type' => 'origin_yard', 'status' => 'active', 'city' => 'Surabaya', 'province' => 'Jawa Timur'],
+            ['code' => 'YRD-SBY-DST', 'name' => 'Surabaya Destination Yard', 'station_code' => 'STN-SBY', 'yard_type' => 'destination_yard', 'status' => 'active', 'city' => 'Surabaya', 'province' => 'Jawa Timur'],
+            ['code' => 'YRD-JKT-ORG', 'name' => 'Jakarta Origin Yard', 'station_code' => 'STN-JKT', 'yard_type' => 'origin_yard', 'status' => 'active', 'city' => 'Jakarta', 'province' => 'DKI Jakarta'],
+            ['code' => 'YRD-JKT-DST', 'name' => 'Jakarta Destination Yard', 'station_code' => 'STN-JKT', 'yard_type' => 'destination_yard', 'status' => 'active', 'city' => 'Jakarta', 'province' => 'DKI Jakarta'],
+            ['code' => 'YRD-CKG-HUB', 'name' => 'Cikarang Hub Yard', 'station_code' => 'STN-CKG', 'yard_type' => 'hub_yard', 'status' => 'active', 'city' => 'Cikarang', 'province' => 'Jawa Barat'],
+            ['code' => 'YRD-SMG-ORG', 'name' => 'Semarang Origin Yard', 'station_code' => 'STN-SMG', 'yard_type' => 'origin_yard', 'status' => 'active', 'city' => 'Semarang', 'province' => 'Jawa Tengah'],
+            ['code' => 'YRD-BDG-HUB', 'name' => 'Bandung Hub Yard', 'station_code' => 'STN-BDG', 'yard_type' => 'hub_yard', 'status' => 'active', 'city' => 'Bandung', 'province' => 'Jawa Barat'],
+            ['code' => 'YRD-MLG-ORG', 'name' => 'Malang Legacy Yard', 'station_code' => 'STN-MLG', 'yard_type' => 'origin_yard', 'status' => 'inactive', 'city' => 'Malang', 'province' => 'Jawa Timur'],
+        ];
+
+        foreach ($rows as $row) {
+            $stationId = $stations[$row['station_code']] ?? null;
+            if (! $stationId) {
+                continue;
+            }
+
+            Yard::updateOrCreate(
+                ['code' => $row['code']],
+                [
+                    'name' => $row['name'],
+                    'business_entity' => 'company',
+                    'station_id' => $stationId,
+                    'yard_type' => $row['yard_type'],
+                    'status' => $row['status'],
+                    'city' => $row['city'],
+                    'province' => $row['province'],
+                    'country' => 'Indonesia',
+                ]
+            );
+        }
+    }
+
+    private function seedRoutes(): void
+    {
+        if (! Schema::hasTable('routes')) {
+            return;
+        }
+
+        $stations = Station::query()->pluck('id', 'code');
+
+        $rows = [
+            [
+                'code' => 'RTE-00001',
+                'origin' => 'STN-SBY',
+                'destination' => 'STN-JKT',
+                'distance_km' => 750,
+                'transit_days' => 2,
+                'status' => 'active',
+                'service_types' => ['fcl', 'lcl'],
+                'shipment_coverages' => ['port_to_port', 'door_to_port'],
+            ],
+            [
+                'code' => 'RTE-00002',
+                'origin' => 'STN-JKT',
+                'destination' => 'STN-SBY',
+                'distance_km' => 750,
+                'transit_days' => 2,
+                'status' => 'active',
+                'service_types' => ['fcl'],
+                'shipment_coverages' => ['port_to_port'],
+            ],
+            [
+                'code' => 'RTE-00003',
+                'origin' => 'STN-SBY',
+                'destination' => 'STN-SMG',
+                'distance_km' => 320,
+                'transit_days' => 1,
+                'status' => 'active',
+                'service_types' => ['lcl'],
+                'shipment_coverages' => ['door_to_door', 'port_to_door'],
+            ],
+            [
+                'code' => 'RTE-00004',
+                'origin' => 'STN-CKG',
+                'destination' => 'STN-BDG',
+                'distance_km' => 180,
+                'transit_days' => 1,
+                'status' => 'active',
+                'service_types' => ['fcl', 'lcl'],
+                'shipment_coverages' => ['door_to_port', 'door_to_door'],
+            ],
+            [
+                'code' => 'RTE-00005',
+                'origin' => 'STN-SOC',
+                'destination' => 'STN-CBN',
+                'distance_km' => 410,
+                'transit_days' => 2,
+                'status' => 'inactive',
+                'service_types' => ['fcl'],
+                'shipment_coverages' => ['port_to_port', 'port_to_door'],
+            ],
+        ];
+
+        foreach ($rows as $row) {
+            $originId = $stations[$row['origin']] ?? null;
+            $destinationId = $stations[$row['destination']] ?? null;
+            if (! $originId || ! $destinationId) {
+                continue;
+            }
+
+            Route::updateOrCreate(
+                ['code' => $row['code']],
+                [
+                    'business_entity' => 'company',
+                    'origin_station_id' => $originId,
+                    'destination_station_id' => $destinationId,
+                    'distance_km' => $row['distance_km'],
+                    'transit_days' => $row['transit_days'],
+                    'status' => $row['status'],
+                    'remark' => 'Seeded master route '.$row['code'],
+                    'service_types' => $row['service_types'],
+                    'shipment_coverages' => $row['shipment_coverages'],
+                ]
+            );
+        }
+    }
+
+    private function seedTrainSchedules(): void
+    {
+        if (! Schema::hasTable('train_schedules')) {
+            return;
+        }
+
+        $routes = Route::query()->where('status', 'active')->orderBy('id')->get();
+        if ($routes->isEmpty()) {
+            return;
+        }
+
+        $rows = [
+            [
+                'code' => 'TRS00001',
+                'train_number' => 'KA-301',
+                'route_index' => 0,
+                'departure_offset_days' => 3,
+                'eta_offset_days' => 5,
+                'max_containers' => 24,
+                'status' => TrainScheduleStatus::Upcoming,
+            ],
+            [
+                'code' => 'TRS00002',
+                'train_number' => 'KA-302',
+                'route_index' => 1,
+                'departure_offset_days' => -1,
+                'eta_offset_days' => 1,
+                'max_containers' => 20,
+                'status' => TrainScheduleStatus::Departed,
+            ],
+            [
+                'code' => 'TRS00003',
+                'train_number' => 'KA-303',
+                'route_index' => 2,
+                'departure_offset_days' => -5,
+                'eta_offset_days' => -4,
+                'max_containers' => 16,
+                'status' => TrainScheduleStatus::Completed,
+            ],
+            [
+                'code' => 'TRS00004',
+                'train_number' => 'KA-304',
+                'route_index' => 3,
+                'departure_offset_days' => 7,
+                'eta_offset_days' => 8,
+                'max_containers' => 18,
+                'status' => TrainScheduleStatus::Cancelled,
+            ],
+            [
+                'code' => 'TRS00005',
+                'train_number' => 'KA-305',
+                'route_index' => 0,
+                'departure_offset_days' => 10,
+                'eta_offset_days' => 12,
+                'max_containers' => 22,
+                'status' => TrainScheduleStatus::Upcoming,
+            ],
+        ];
+
+        foreach ($rows as $row) {
+            $route = $routes[$row['route_index'] % $routes->count()] ?? $routes->first();
+            if (! $route) {
+                continue;
+            }
+
+            TrainSchedule::updateOrCreate(
+                ['code' => $row['code']],
+                [
+                    'business_entity' => 'company',
+                    'train_number' => $row['train_number'],
+                    'route_id' => $route->id,
+                    'departure_at' => now()->addDays($row['departure_offset_days'])->setTime(8, 0),
+                    'eta_at' => now()->addDays($row['eta_offset_days'])->setTime(20, 0),
+                    'max_containers' => $row['max_containers'],
+                    'status' => $row['status'],
+                    'remark' => 'Seeded train schedule '.$row['code'],
+                ]
+            );
+        }
+    }
+
     private function seedContainerAssets(): void
     {
         if (! Schema::hasTable('container_assets')) {
@@ -315,30 +551,12 @@ class MasterDataSeeder extends Seeder
     private function resolveDefaultYardId(): ?int
     {
         if (Schema::hasTable('yards')) {
-            $station = Station::firstOrCreate(
-                ['code' => 'STN-SBY'],
-                [
-                    'name' => 'Surabaya Pasarturi',
-                    'business_entity' => 'company',
-                    'city' => 'Surabaya',
-                    'province' => 'Jawa Timur',
-                    'status' => 'active',
-                ]
-            );
-
-            return Yard::firstOrCreate(
-                ['code' => 'YRD-SBY'],
-                [
-                    'name' => 'Surabaya Container Yard',
-                    'business_entity' => 'company',
-                    'station_id' => $station->id,
-                    'yard_type' => 'origin_yard',
-                    'status' => 'active',
-                    'city' => 'Surabaya',
-                    'province' => 'Jawa Timur',
-                    'country' => 'Indonesia',
-                ]
-            )->id;
+            return Yard::query()
+                ->where('yard_type', 'origin_yard')
+                ->where('status', 'active')
+                ->orderBy('id')
+                ->value('id')
+                ?? Yard::query()->orderBy('id')->value('id');
         }
 
         return Location::orderBy('id')->first()?->id;

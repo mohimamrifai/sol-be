@@ -29,6 +29,7 @@ use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
 use App\Models\ShipmentTracking;
+use App\Models\TrainSchedule;
 use App\Models\TransportMode;
 use App\Models\User;
 use App\Models\Vendor;
@@ -108,6 +109,7 @@ class CustomerDemoSeeder extends Seeder
 
         $bookings = $this->seedBookings($mainCompany, $customerUsers);
         $this->seedShipments($bookings, $customerUsers);
+        $this->seedTrainScheduleAssignments();
         $internalOps = User::query()->where('email', 'operations@demo.internal.sol.test')->first();
         $this->seedAdminVendorJobOrders($mainCompany, $internalOps ?? $admin);
         $this->seedInvoices($bookings, $customerUsers);
@@ -753,6 +755,49 @@ class CustomerDemoSeeder extends Seeder
 
                 $this->seedTracking($shipment, $operational);
             }
+        }
+    }
+
+    private function seedTrainScheduleAssignments(): void
+    {
+        if (! Schema::hasTable('train_schedules') || ! Schema::hasColumn('shipments', 'train_schedule_id')) {
+            return;
+        }
+
+        $schedules = TrainSchedule::query()->orderBy('id')->get();
+        if ($schedules->isEmpty()) {
+            return;
+        }
+
+        $shipments = Shipment::query()
+            ->whereNull('vendor_company_id')
+            ->whereNull('train_schedule_id')
+            ->orderBy('id')
+            ->get();
+
+        if ($shipments->isEmpty()) {
+            return;
+        }
+
+        $assignments = [
+            0 => 2,
+            1 => 2,
+            2 => 1,
+            4 => 1,
+        ];
+
+        $cursor = 0;
+        foreach ($assignments as $scheduleIndex => $count) {
+            $schedule = $schedules[$scheduleIndex] ?? null;
+            if (! $schedule) {
+                continue;
+            }
+
+            foreach ($shipments->slice($cursor, $count) as $shipment) {
+                $shipment->update(['train_schedule_id' => $schedule->id]);
+            }
+
+            $cursor += $count;
         }
     }
 
