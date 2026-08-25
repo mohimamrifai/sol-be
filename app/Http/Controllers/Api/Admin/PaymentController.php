@@ -190,6 +190,9 @@ class PaymentController extends Controller
         if ($request->filled('payment_date_to')) {
             $query->whereDate('paid_at', '<=', $request->payment_date_to);
         }
+        if ($request->filled('link_status') && $request->string('link_status')->toString() === 'expired') {
+            $query->where('status', Payment::STATUS_EXPIRED);
+        }
         if ($request->filled('invoice_id')) {
             $query->where('invoice_id', $request->invoice_id);
         }
@@ -469,6 +472,9 @@ class PaymentController extends Controller
         }
         if ($request->filled('payment_date_to')) {
             $query->whereHas('payments', fn ($pq) => $pq->whereDate('paid_at', '<=', $request->payment_date_to));
+        }
+        if ($request->filled('link_status') && $request->string('link_status')->toString() === 'expired') {
+            $query->whereHas('payments', fn ($pq) => $pq->where('status', Payment::STATUS_EXPIRED));
         }
 
         if ($request->filled('search')) {

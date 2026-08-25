@@ -21,17 +21,9 @@ class DashboardController extends Controller
         ]);
 
         $fsd = $this->dashboardService->build($validated, $request->user());
-        $summary = $fsd['summary'];
 
         return response()->json([
-            'data' => array_merge($fsd, [
-                'pendingBookings' => [],
-                'activeShipments' => [],
-                'overdueInvoices' => [],
-                'recentPayments' => [],
-                'shipmentVolumeByWeek' => [],
-                'summary' => $summary,
-            ]),
+            'data' => $fsd,
         ]);
     }
 }

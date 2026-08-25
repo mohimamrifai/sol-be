@@ -19,7 +19,7 @@ return [
         'draft',
         'submitted',
         'under_review',
-        'confirmed',
+        'approved',
         'rejected',
     ],
 ];

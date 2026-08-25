@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Booking;
 use App\Models\BookingActivity;
 use App\Models\Company;
+use App\Models\ContainerAsset;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\Payment;
@@ -19,23 +20,29 @@ use Carbon\Carbon;
 
 class AdminDashboardService
 {
+    public function __construct(
+        private readonly ContainerFreeStorageService $containerFreeStorageService,
+    ) {}
+
     public function build(array $input, ?User $user = null): array
     {
-        $access = $user?->featureAccessList() ?? [];
         $can = fn (string $perm): bool => $user === null || $user->hasFeatureAccess($perm);
         $businessDate = Carbon::parse($input['business_date'] ?? now()->toDateString())->startOfDay();
         [$rangeStart, $rangeEnd] = $this->resolveDateRange($input, $businessDate);
         $monthStart = $businessDate->copy()->startOfMonth();
         $monthEnd = $businessDate->copy()->endOfMonth();
 
-        $summary = $can('view_dashboard') ? $this->buildSummary($businessDate, $monthStart, $monthEnd) : [];
-        $bookingStatusBreakdown = $can('view_bookings') ? $this->bookingStatusBreakdown($rangeStart, $rangeEnd) : [];
-        $shipmentStatusBreakdown = $can('view_shipments') ? $this->shipmentStatusBreakdown() : [];
-        $todayOperations = $can('view_operations') ? $this->todayOperations($businessDate) : [];
-        $financeSummary = ($can('view_invoices') || $can('view_payments')) ? $this->financeSummary($rangeStart, $rangeEnd) : [];
-        $containerSummary = $can('view_containers') ? $this->containerSummary() : [];
-        $recentActivity = $can('view_dashboard') ? $this->recentActivity($access) : [];
-        $notifications = $can('view_dashboard') ? $this->notifications($businessDate) : [];
+        $sections = [
+            'summary' => $can('view_dashboard'),
+            'bookingStatus' => $can('view_bookings'),
+            'shipmentStatus' => $can('view_shipments'),
+            'todayOperations' => $can('view_operations'),
+            'financeSummary' => $can('view_invoices') || $can('view_payments'),
+            'containerSummary' => $can('view_containers'),
+            'recentActivity' => $can('view_dashboard'),
+            'notifications' => $can('view_dashboard'),
+            'quickActions' => $can('view_dashboard'),
+        ];
 
         return [
             'filters' => [
@@ -44,14 +51,19 @@ class AdminDashboardService
                 'dateFrom' => $rangeStart->toDateString(),
                 'dateTo' => $rangeEnd->toDateString(),
             ],
-            'summary' => $summary,
-            'bookingStatusBreakdown' => $bookingStatusBreakdown,
-            'shipmentStatusBreakdown' => $shipmentStatusBreakdown,
-            'todayOperations' => $todayOperations,
-            'financeSummary' => $financeSummary,
-            'containerSummary' => $containerSummary,
-            'recentActivity' => $recentActivity,
-            'notifications' => $notifications,
+            'sections' => $sections,
+            'summary' => $sections['summary'] ? $this->buildSummary($businessDate, $monthStart, $monthEnd) : null,
+            'bookingStatusBreakdown' => $sections['bookingStatus']
+                ? $this->bookingStatusBreakdown($rangeStart, $rangeEnd)
+                : null,
+            'shipmentStatusBreakdown' => $sections['shipmentStatus']
+                ? $this->shipmentStatusBreakdown($rangeStart, $rangeEnd)
+                : null,
+            'todayOperations' => $sections['todayOperations'] ? $this->todayOperations($businessDate) : null,
+            'financeSummary' => $sections['financeSummary'] ? $this->financeSummary($rangeStart, $rangeEnd) : null,
+            'containerSummary' => $sections['containerSummary'] ? $this->containerSummary() : null,
+            'recentActivity' => $sections['recentActivity'] ? $this->recentActivity($user) : null,
+            'notifications' => $sections['notifications'] ? $this->notifications($businessDate, $user) : null,
         ];
     }
 
@@ -102,16 +114,6 @@ class AdminDashboardService
                 ->sum('total_amount'),
             'outstandingReceivable' => round(max($outstandingReceivable, 0), 2),
             'outstandingPayable' => round(max($outstandingPayable, 0), 2),
-            'activeCompanies' => Company::where('status', 'active')->count(),
-            'overdueInvoices' => Invoice::whereIn('status', ['issued', 'partially_paid'])
-                ->whereNotNull('due_date')
-                ->where('due_date', '<', $today)
-                ->count(),
-            'pendingCompanyApprovals' => Company::where('status', 'pending')->count(),
-            'paymentsToday' => Payment::whereIn('status', ['success', 'settlement'])
-                ->whereDate('paid_at', $today)
-                ->count(),
-            'rackUtilization' => 0,
         ];
     }
 
@@ -127,19 +129,26 @@ class AdminDashboardService
             'draft' => (int) ($counts['draft'] ?? 0),
             'submitted' => (int) ($counts['submitted'] ?? 0),
             'under_review' => (int) ($counts['under_review'] ?? 0),
-            'confirmed' => (int) ($counts['approved'] ?? 0),
+            'approved' => (int) ($counts['approved'] ?? 0),
             'rejected' => (int) ($counts['rejected'] ?? 0),
         ];
     }
 
-    private function shipmentStatusBreakdown(): array
+    private function shipmentStatusBreakdown(?Carbon $rangeStart = null, ?Carbon $rangeEnd = null): array
     {
         $mapping = config('admin-dashboard.fsd_shipment_statuses', []);
         $breakdown = array_fill_keys(array_keys($mapping), 0);
 
-        $shipments = Shipment::query()
-            ->whereNotIn('status', ['cancelled'])
-            ->get(['id', 'status']);
+        $query = Shipment::query()->whereNotIn('status', ['cancelled']);
+
+        if ($rangeStart !== null && $rangeEnd !== null) {
+            $query->where(function ($query) use ($rangeStart, $rangeEnd) {
+                $query->whereBetween('created_at', [$rangeStart, $rangeEnd])
+                    ->orWhereBetween('updated_at', [$rangeStart, $rangeEnd]);
+            });
+        }
+
+        $shipments = $query->get(['id', 'status']);
 
         foreach ($shipments as $shipment) {
             $status = strtolower((string) $shipment->status);
@@ -166,19 +175,27 @@ class AdminDashboardService
         $today = $businessDate->toDateString();
 
         return [
-            'pickupToday' => Shipment::whereDate('created_at', '<=', $today)
-                ->where('status', 'cargo_received')
+            'pickupToday' => Shipment::query()
+                ->whereDate('pickup_scheduled_at', $today)
+                ->whereIn('status', ['survey_completed', 'cargo_received', 'created', 'booking_created'])
                 ->count(),
-            'trainDepartureToday' => Shipment::where(function ($q) use ($today) {
-                $q->whereDate('estimated_departure', $today)
-                    ->orWhereDate('actual_departure', $today);
-            })->whereIn('status', ['departed', 'train_departed', 'container_sealed', 'stuffing_container'])->count(),
-            'trainArrivalToday' => Shipment::where(function ($q) use ($today) {
-                $q->whereDate('estimated_arrival', $today)
-                    ->orWhereDate('actual_arrival', $today);
-            })->whereIn('status', ['arrived', 'train_arrived', 'departed', 'train_departed'])->count(),
-            'deliveryToday' => Shipment::whereDate('updated_at', $today)
-                ->where('status', 'ready_for_pickup')
+            'trainDepartureToday' => Shipment::query()
+                ->where(function ($q) use ($today) {
+                    $q->whereDate('estimated_departure', $today)
+                        ->orWhereDate('actual_departure', $today);
+                })
+                ->whereIn('status', ['container_sealed', 'stuffing_container', 'departed', 'train_departed'])
+                ->count(),
+            'trainArrivalToday' => Shipment::query()
+                ->where(function ($q) use ($today) {
+                    $q->whereDate('estimated_arrival', $today)
+                        ->orWhereDate('actual_arrival', $today);
+                })
+                ->whereIn('status', ['departed', 'train_departed', 'arrived', 'train_arrived'])
+                ->count(),
+            'deliveryToday' => Shipment::query()
+                ->whereDate('delivery_scheduled_at', $today)
+                ->whereIn('status', ['ready_for_pickup', 'container_unloading', 'unloading'])
                 ->count(),
             'podWaitingUpload' => ProofOfDelivery::where('status', 'waiting_pod')->count(),
         ];
@@ -218,30 +235,34 @@ class AdminDashboardService
             'customerInvoice' => round($customerInvoice, 2),
             'customerPayment' => round($customerPayment, 2),
             'outstandingCustomer' => round($outstandingCustomer, 2),
-            'outstandingVendor' => round($outstandingVendor, 2),
             'vendorInvoice' => round($vendorInvoice, 2),
             'vendorPayment' => round($vendorPayment, 2),
+            'outstandingVendor' => round($outstandingVendor, 2),
         ];
     }
 
     private function containerSummary(): array
     {
+        $base = ContainerAsset::query();
+
         return [
-            'available' => 0,
-            'reserved' => 0,
-            'inTransit' => Shipment::whereNotIn('status', ['completed', 'cancelled'])->count(),
-            'maintenance' => 0,
-            'inactive' => 0,
+            'available' => (clone $base)->where('status', 'available')->count(),
+            'reserved' => (clone $base)->where('status', 'reserved')->count(),
+            'inTransit' => (clone $base)->where('status', 'in_transit')->count(),
+            'maintenance' => (clone $base)->where('status', 'maintenance')->count(),
+            'inactive' => (clone $base)->where('status', 'inactive')->count(),
         ];
     }
 
-    private function recentActivity(array $access = []): array
+    private function recentActivity(?User $user): array
     {
+        $access = $user?->featureAccessList() ?? [];
         $items = collect();
-        $showAll = $access === [];
-        $canBookings = $showAll || in_array('view_bookings', $access, true);
-        $canFinance = $showAll || in_array('view_invoices', $access, true) || in_array('view_payments', $access, true);
-        $canShipments = $showAll || in_array('view_shipments', $access, true);
+        $canBookings = $user === null || $user->hasFeatureAccess('view_bookings');
+        $canFinance = $user === null
+            || $user->hasFeatureAccess('view_invoices')
+            || $user->hasFeatureAccess('view_payments');
+        $canShipments = $user === null || $user->hasFeatureAccess('view_shipments');
 
         if ($canBookings) {
             BookingActivity::with('actor:id,name')
@@ -318,74 +339,99 @@ class AdminDashboardService
             ->all();
     }
 
-    private function notifications(Carbon $businessDate): array
+    private function notifications(Carbon $businessDate, ?User $user): array
     {
         $today = $businessDate->toDateString();
         $notifications = [];
 
-        $pendingBookings = Booking::whereIn('status', ['submitted', 'under_review'])->count();
-        if ($pendingBookings > 0) {
-            $notifications[] = [
-                'key' => 'pendingBookings',
-                'count' => $pendingBookings,
-                'link' => '/dashboard/admin/customer/bookings?status=under_review',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_bookings')) {
+            $pendingBookings = Booking::whereIn('status', ['submitted', 'under_review'])->count();
+            if ($pendingBookings > 0) {
+                $notifications[] = [
+                    'key' => 'pendingBookings',
+                    'count' => $pendingBookings,
+                    'link' => '/dashboard/admin/customer/bookings?status=under_review',
+                ];
+            }
         }
 
-        $readyOperation = $this->shipmentStatusBreakdown()['ready_operation'] ?? 0;
-        if ($readyOperation > 0) {
-            $notifications[] = [
-                'key' => 'readyOperation',
-                'count' => $readyOperation,
-                'link' => '/dashboard/admin/customer/shipments?status=survey_completed',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_shipments')) {
+            $readyOperation = $this->shipmentStatusBreakdown()['ready_operation'] ?? 0;
+            if ($readyOperation > 0) {
+                $notifications[] = [
+                    'key' => 'readyOperation',
+                    'count' => $readyOperation,
+                    'link' => '/dashboard/admin/customer/shipments?status=survey_completed',
+                ];
+            }
         }
 
-        $trainDepartureToday = $this->todayOperations($businessDate)['trainDepartureToday'];
-        if ($trainDepartureToday > 0) {
-            $notifications[] = [
-                'key' => 'trainDepartureToday',
-                'count' => $trainDepartureToday,
-                'link' => '/dashboard/admin/operations/train-departure',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_operations')) {
+            $trainDepartureToday = $this->todayOperations($businessDate)['trainDepartureToday'];
+            if ($trainDepartureToday > 0) {
+                $notifications[] = [
+                    'key' => 'trainDepartureToday',
+                    'count' => $trainDepartureToday,
+                    'link' => "/dashboard/admin/operations/train-departure?date={$today}",
+                ];
+            }
+
+            $podWaiting = $this->todayOperations($businessDate)['podWaitingUpload'];
+            if ($podWaiting > 0) {
+                $notifications[] = [
+                    'key' => 'podWaitingUpload',
+                    'count' => $podWaiting,
+                    'link' => '/dashboard/admin/operations/proof-of-delivery?status=waiting_pod',
+                ];
+            }
         }
 
-        $podWaiting = $this->todayOperations($businessDate)['podWaitingUpload'];
-        if ($podWaiting > 0) {
-            $notifications[] = [
-                'key' => 'podWaitingUpload',
-                'count' => $podWaiting,
-                'link' => '/dashboard/admin/operations/proof-of-delivery',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_invoices')) {
+            $invoicesDueToday = Invoice::whereDate('due_date', $today)
+                ->whereIn('status', ['issued', 'partially_paid', 'overdue'])
+                ->count();
+            if ($invoicesDueToday > 0) {
+                $notifications[] = [
+                    'key' => 'invoicesDueToday',
+                    'count' => $invoicesDueToday,
+                    'link' => "/dashboard/admin/customer/invoices?due_from={$today}&due_to={$today}",
+                ];
+            }
         }
 
-        $invoicesDueToday = Invoice::whereDate('due_date', $today)
-            ->whereIn('status', ['issued', 'partially_paid', 'overdue'])
-            ->count();
-        if ($invoicesDueToday > 0) {
-            $notifications[] = [
-                'key' => 'invoicesDueToday',
-                'count' => $invoicesDueToday,
-                'link' => '/dashboard/admin/customer/invoices',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_vendor_invoices_admin')) {
+            $vendorInvoicesPending = VendorInvoice::query()
+                ->whereIn('status', ['received', 'under_verification', 'submitted'])
+                ->count();
+            if ($vendorInvoicesPending > 0) {
+                $notifications[] = [
+                    'key' => 'vendorInvoicesPending',
+                    'count' => $vendorInvoicesPending,
+                    'link' => '/dashboard/admin/vendor/invoices?status=received',
+                ];
+            }
         }
 
-        $vendorInvoicesPending = VendorInvoice::where('status', 'submitted')->count();
-        if ($vendorInvoicesPending > 0) {
-            $notifications[] = [
-                'key' => 'vendorInvoicesPending',
-                'count' => $vendorInvoicesPending,
-                'link' => '/dashboard/admin/vendor/invoices',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_payments')) {
+            $expiredPayments = Payment::where('status', Payment::STATUS_EXPIRED)->count();
+            if ($expiredPayments > 0) {
+                $notifications[] = [
+                    'key' => 'expiredPayments',
+                    'count' => $expiredPayments,
+                    'link' => '/dashboard/admin/customer/payments?link_status=expired',
+                ];
+            }
         }
 
-        $expiredPayments = Payment::where('status', Payment::STATUS_EXPIRED)->count();
-        if ($expiredPayments > 0) {
-            $notifications[] = [
-                'key' => 'expiredPayments',
-                'count' => $expiredPayments,
-                'link' => '/dashboard/admin/customer/payments',
-            ];
+        if ($user === null || $user->hasFeatureAccess('view_containers')) {
+            $freeStorageExceeded = $this->containerFreeStorageService->exceededCount($businessDate);
+            if ($freeStorageExceeded > 0) {
+                $notifications[] = [
+                    'key' => 'freeStorageExceeded',
+                    'count' => $freeStorageExceeded,
+                    'link' => '/dashboard/admin/container/containers?storage_exceeded=1',
+                ];
+            }
         }
 
         return $notifications;

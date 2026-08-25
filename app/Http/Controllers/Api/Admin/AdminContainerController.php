@@ -7,11 +7,15 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\ContainerAsset;
 use App\Models\ContainerType;
+use App\Services\ContainerFreeStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminContainerController extends Controller
 {
+    public function __construct(
+        private readonly ContainerFreeStorageService $containerFreeStorageService,
+    ) {}
     public function stats(): JsonResponse
     {
         $base = ContainerAsset::query();
@@ -54,6 +58,10 @@ class AdminContainerController extends Controller
         }
         if ($request->filled('current_yard_id')) {
             $query->where('current_yard_id', $request->current_yard_id);
+        }
+        if ($request->boolean('storage_exceeded')) {
+            $ids = $this->containerFreeStorageService->exceededAssetIds(now());
+            $query->whereIn('id', $ids ?: [0]);
         }
 
         $paginated = $query->orderBy('container_number')->paginate($request->integer('per_page', 15));
