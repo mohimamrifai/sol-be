@@ -17,7 +17,6 @@ use App\Models\CargoCategory;
 use App\Models\Company;
 use App\Models\CompanyActivity;
 use App\Models\CompanyDocument;
-use App\Models\ContainerType;
 use App\Models\CustomerLocation;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
@@ -111,8 +110,12 @@ class CustomerDemoSeeder extends Seeder
         $this->seedShipments($bookings, $customerUsers);
         $this->seedTrainScheduleAssignments();
         $internalOps = User::query()->where('email', 'operations@demo.internal.sol.test')->first();
+        $this->call(VendorSeeder::class);
         $this->seedAdminVendorJobOrders($mainCompany, $internalOps ?? $admin);
+        $this->call(VendorAdminInvoiceSeeder::class);
+        $this->call(VendorAdminPaymentSeeder::class);
         $this->seedInvoices($bookings, $customerUsers);
+        $this->call(CustomerPricingSeeder::class);
 
         $vendorCompany = $this->seedVendorCompany();
         $vendorUsers = $this->seedVendorUsers($vendorCompany);
@@ -165,6 +168,8 @@ class CustomerDemoSeeder extends Seeder
             'booking_containers',
             'bookings',
             'customer_discounts',
+            'customer_pricing_charges',
+            'customer_pricings',
             'branches',
             'company_activities',
             'company_documents',
@@ -1354,11 +1359,13 @@ class CustomerDemoSeeder extends Seeder
         }
 
         $statuses = [
-            VendorJobOrderStatus::Draft,
-            VendorJobOrderStatus::Sent,
-            VendorJobOrderStatus::InProgress,
             VendorJobOrderStatus::Completed,
-            VendorJobOrderStatus::Cancelled,
+            VendorJobOrderStatus::Completed,
+            VendorJobOrderStatus::Completed,
+            VendorJobOrderStatus::Completed,
+            VendorJobOrderStatus::Completed,
+            VendorJobOrderStatus::InProgress,
+            VendorJobOrderStatus::Sent,
         ];
 
         $services = [
@@ -1367,9 +1374,9 @@ class CustomerDemoSeeder extends Seeder
             VendorJobOrderService::Rail,
         ];
 
-        foreach ($shipments->take(5)->values() as $index => $shipment) {
+        foreach ($shipments->take(count($statuses))->values() as $index => $shipment) {
             $vendor = $vendors[$index % $vendors->count()];
-            $status = $statuses[$index % count($statuses)];
+            $status = $statuses[$index];
             $service = $services[$index % count($services)];
 
             $jo = VendorJobOrder::create([

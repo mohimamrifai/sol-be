@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\AdditionalCharge;
 use App\Models\AdditionalService;
 use App\Models\CargoCategory;
 use App\Models\ContainerAsset;
@@ -29,6 +30,7 @@ class MasterDataSeeder extends Seeder
         $this->seedServiceTypes();
         $this->seedContainerTypes();
         $this->seedAdditionalServices();
+        $this->seedAdditionalCharges();
         $this->seedTrains();
         $this->seedCargoCategories();
         $this->seedStations();
@@ -152,16 +154,44 @@ class MasterDataSeeder extends Seeder
 
         foreach ($definitions as $def) {
             $mode = $modes[$def['mode']] ?? $rail;
-            ServiceType::firstOrCreate(
+            ServiceType::updateOrCreate(
                 ['code' => $def['code']],
                 [
                     'transport_mode_id' => $mode->id,
                     'name' => $def['name'],
                     'description' => 'Seeded service type '.$def['code'],
+                    'service_category' => $this->inferServiceCategory($def['mode'], $def['code']),
+                    'pricing_basis' => $this->inferServicePricingBasis($def['code']),
                     'is_active' => true,
                 ]
             );
         }
+    }
+
+    private function inferServiceCategory(string $modeCode, string $serviceCode): string
+    {
+        return match ($modeCode) {
+            'RAIL', 'DTB' => 'rail_freight',
+            'TRUCK', 'XTRK', 'CCT', 'CBT' => 'pickup_trucking',
+            'LML' => 'delivery_trucking',
+            'DPT', 'HUB' => 'storage',
+            default => str_contains($serviceCode, 'RENT') ? 'container_rental' : 'other',
+        };
+    }
+
+    private function inferServicePricingBasis(string $serviceCode): string
+    {
+        if (preg_match('/FCL|DTB/', $serviceCode)) {
+            return 'per_container';
+        }
+        if (preg_match('/LCL/', $serviceCode)) {
+            return 'per_cbm';
+        }
+        if (preg_match('/HVY|PRJ/', $serviceCode)) {
+            return 'per_ton';
+        }
+
+        return 'per_trip';
     }
 
     private function seedContainerTypes(): void
@@ -238,6 +268,45 @@ class MasterDataSeeder extends Seeder
             // Use 'code' as the stable unique key for firstOrCreate (fallback to name if no code).
             $key = isset($svc['code']) ? ['code' => $svc['code']] : ['name' => $svc['name']];
             AdditionalService::firstOrCreate($key, array_merge($svc, ['is_active' => true]));
+        }
+    }
+
+    private function seedAdditionalCharges(): void
+    {
+        $rows = [
+            // Auto-trigger charges (code is stable identifier for observers)
+            ['code' => 'DG', 'name' => 'Dangerous Goods Surcharge', 'charge_category' => 'documentation', 'pricing_basis' => 'per_shipment', 'description' => 'Biaya tambahan kargo berbahaya (DG)'],
+            ['code' => 'REF', 'name' => 'Refrigerated Surcharge', 'charge_category' => 'handling', 'pricing_basis' => 'per_container', 'description' => 'Penanganan suhu terkendali'],
+            ['code' => 'LIQ', 'name' => 'Liquid Cargo Surcharge', 'charge_category' => 'handling', 'pricing_basis' => 'per_ton', 'description' => 'Penanganan kargo cair'],
+            ['code' => 'OOG', 'name' => 'Out of Gauge Surcharge', 'charge_category' => 'handling', 'pricing_basis' => 'per_shipment', 'description' => 'Muatan project / oversize'],
+            ['code' => 'MIX', 'name' => 'Mixed Cargo Surcharge', 'charge_category' => 'handling', 'pricing_basis' => 'per_shipment', 'description' => 'Sortir dan penanganan muatan campuran'],
+            ['code' => 'CLEAN', 'name' => 'Container Cleaning', 'charge_category' => 'container', 'pricing_basis' => 'per_container', 'description' => 'Pembersihan kontainer residual'],
+            // Handling
+            ['code' => 'LOLO', 'name' => 'Lift On / Lift Off', 'charge_category' => 'handling', 'pricing_basis' => 'per_container', 'description' => 'Biaya angkat kontainer'],
+            ['code' => 'FORKLIFT', 'name' => 'Forklift Handling', 'charge_category' => 'handling', 'pricing_basis' => 'per_hour', 'description' => 'Penanganan menggunakan forklift'],
+            ['code' => 'FRAGILE', 'name' => 'Fragile Handling', 'charge_category' => 'handling', 'pricing_basis' => 'per_shipment', 'description' => 'Penanganan barang mudah pecah'],
+            // Storage
+            ['code' => 'STRG_DAY', 'name' => 'Warehouse Storage', 'charge_category' => 'storage', 'pricing_basis' => 'per_day', 'description' => 'Penyimpanan di gudang per hari'],
+            ['code' => 'STRG_CBM', 'name' => 'Storage per CBM', 'charge_category' => 'storage', 'pricing_basis' => 'per_cbm', 'description' => 'Penyimpanan berdasarkan volume'],
+            // Documentation
+            ['code' => 'CUST_DOC', 'name' => 'Customs Documentation', 'charge_category' => 'documentation', 'pricing_basis' => 'per_document', 'description' => 'Bantuan dokumen kepabeanan'],
+            ['code' => 'COO', 'name' => 'Certificate of Origin', 'charge_category' => 'documentation', 'pricing_basis' => 'per_document', 'description' => 'Pengurusan sertifikat asal barang'],
+            // Container
+            ['code' => 'CNT_RENT', 'name' => 'Container Rent', 'charge_category' => 'container', 'pricing_basis' => 'per_day', 'description' => 'Sewa unit kontainer'],
+            ['code' => 'SEAL', 'name' => 'Container Seal', 'charge_category' => 'container', 'pricing_basis' => 'per_seal', 'description' => 'Segel kontainer'],
+            // Trucking
+            ['code' => 'PICKUP', 'name' => 'Pickup Trucking', 'charge_category' => 'trucking', 'pricing_basis' => 'per_trip', 'description' => 'Penjemputan barang dari alamat pengirim'],
+            ['code' => 'DELIVERY', 'name' => 'Delivery Trucking', 'charge_category' => 'trucking', 'pricing_basis' => 'per_trip', 'description' => 'Pengantaran ke alamat penerima'],
+            // Rail
+            ['code' => 'RAIL_FRGT', 'name' => 'Rail Freight Surcharge', 'charge_category' => 'rail', 'pricing_basis' => 'per_container', 'description' => 'Biaya tambahan angkutan kereta'],
+            ['code' => 'RAIL_WAGON', 'name' => 'Wagon Detention', 'charge_category' => 'rail', 'pricing_basis' => 'per_day', 'description' => 'Detention gerbong kereta'],
+            // Other / weight-based
+            ['code' => 'INSURANCE', 'name' => 'Cargo Insurance', 'charge_category' => 'other', 'pricing_basis' => 'per_shipment', 'description' => 'Asuransi kargo dasar'],
+            ['code' => 'WEIGHT_KG', 'name' => 'Weight Surcharge', 'charge_category' => 'other', 'pricing_basis' => 'per_kg', 'description' => 'Biaya tambahan berdasarkan berat'],
+        ];
+
+        foreach ($rows as $row) {
+            AdditionalCharge::updateOrCreate(['code' => $row['code']], array_merge($row, ['is_active' => true]));
         }
     }
 

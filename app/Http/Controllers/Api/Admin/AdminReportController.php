@@ -21,7 +21,7 @@ class AdminReportController extends Controller
     {
         $paginated = $this->shipmentReportQuery($request)
             ->orderByDesc('created_at')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (Shipment $s) => $this->transformShipmentRow($s));
 
@@ -49,7 +49,7 @@ class AdminReportController extends Controller
     {
         $paginated = $this->bookingReportQuery($request)
             ->orderByDesc('created_at')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (Booking $b) => [
             'id' => $b->id,
@@ -91,7 +91,7 @@ class AdminReportController extends Controller
     {
         $paginated = $this->invoiceReportQuery($request)
             ->orderByDesc('issued_date')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (Invoice $inv) => [
             'id' => $inv->id,
@@ -133,7 +133,7 @@ class AdminReportController extends Controller
     {
         $paginated = $this->paymentReportQuery($request)
             ->orderByDesc('created_at')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (Payment $p) => [
             'id' => $p->id,
@@ -175,7 +175,7 @@ class AdminReportController extends Controller
     {
         $paginated = $this->containerReportQuery($request)
             ->orderBy('container_number')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (ContainerAsset $c) => [
             'id' => $c->id,
@@ -227,7 +227,7 @@ class AdminReportController extends Controller
             $query->where('company_id', $request->company_id);
         }
         if ($request->filled('status')) {
-            $query->where('status', $request->status);
+            $this->applyShipmentStatusFilter($query, (string) $request->status);
         }
         if ($request->filled('service_type_id')) {
             $query->where('service_type_id', $request->service_type_id);
@@ -320,6 +320,19 @@ class AdminReportController extends Controller
         }
 
         return $query;
+    }
+
+    private function applyShipmentStatusFilter($query, string $fsdStatus): void
+    {
+        $map = [
+            'planning' => ['created', 'booking_created', 'survey_completed'],
+            'ready_for_departure' => ['cargo_received', 'stuffing_container', 'container_sealed', 'ready_for_pickup'],
+            'in_transit' => ['train_departed', 'departed', 'train_arrived', 'arrived', 'container_unloading', 'unloading'],
+            'completed' => ['completed'],
+            'cancelled' => ['cancelled'],
+        ];
+        $statuses = $map[$fsdStatus] ?? [$fsdStatus];
+        $query->whereIn('status', $statuses);
     }
 
     private function transformShipmentRow(Shipment $s): array

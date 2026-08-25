@@ -17,7 +17,7 @@ class AdminVendorReportController extends Controller
     public function invoiceIndex(Request $request): JsonResponse
     {
         $query = $this->invoiceReportQuery($request);
-        $paginated = $query->orderByDesc('invoice_date')->paginate($request->integer('per_page', 50));
+        $paginated = $query->orderByDesc('invoice_date')->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(fn (VendorInvoice $inv) => [
             'id' => $inv->id,
@@ -57,7 +57,7 @@ class AdminVendorReportController extends Controller
     public function paymentIndex(Request $request): JsonResponse
     {
         $query = $this->paymentReportQuery($request);
-        $paginated = $query->orderByDesc('created_at')->paginate($request->integer('per_page', 50));
+        $paginated = $query->orderByDesc('created_at')->paginate($request->integer('per_page', 10));
 
         $paginated->getCollection()->transform(function (VendorPaymentRequest $req) {
             $lastPayment = $req->payments()->orderByDesc('payment_date')->first();

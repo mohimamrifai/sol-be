@@ -180,7 +180,20 @@ class MasterDataController extends Controller
             }
         }
 
-        return response()->json($query->orderBy('name')->paginate($request->per_page ?? 15));
+        $paginated = $query->orderBy('name')->paginate($request->per_page ?? 15);
+        $paginated->getCollection()->transform(function (ServiceType $serviceType) {
+            $category = $serviceType->service_category ?? $this->inferServiceCategory($serviceType);
+            $pricingBasis = $serviceType->pricing_basis ?? 'per_trip';
+            $data = $serviceType->toArray();
+            $data['service_category'] = $category;
+            $data['pricing_basis'] = $pricingBasis;
+            $data['service_category_label'] = $this->serviceTypeCategoryLabel($category);
+            $data['pricing_basis_label'] = $this->serviceTypePricingBasisLabel($pricingBasis);
+
+            return $data;
+        });
+
+        return response()->json($paginated);
     }
 
     public function storeServiceType(Request $request): JsonResponse
@@ -802,5 +815,46 @@ class MasterDataController extends Controller
             'description' => $charge->description,
             'is_active' => $charge->is_active,
         ];
+    }
+
+    private function serviceTypeCategoryLabel(?string $value): ?string
+    {
+        return match ($value) {
+            'rail_freight' => 'Rail Freight',
+            'pickup_trucking' => 'Pickup Trucking',
+            'delivery_trucking' => 'Delivery Trucking',
+            'container_rental' => 'Container Rental',
+            'lift_on' => 'Lift On',
+            'lift_off' => 'Lift Off',
+            'storage' => 'Storage',
+            'other' => 'Other',
+            default => $value,
+        };
+    }
+
+    private function inferServiceCategory(ServiceType $serviceType): string
+    {
+        $modeCode = strtoupper((string) ($serviceType->transportMode?->code ?? ''));
+        $serviceCode = strtoupper((string) ($serviceType->code ?? ''));
+
+        return match ($modeCode) {
+            'RAIL', 'DTB' => 'rail_freight',
+            'TRUCK', 'XTRK', 'CCT', 'CBT' => 'pickup_trucking',
+            'LML' => 'delivery_trucking',
+            'DPT', 'HUB' => 'storage',
+            default => str_contains($serviceCode, 'RENT') ? 'container_rental' : 'other',
+        };
+    }
+
+    private function serviceTypePricingBasisLabel(?string $value): ?string
+    {
+        return match ($value) {
+            'per_trip' => 'Per Trip',
+            'per_container' => 'Per Container',
+            'per_ton' => 'Per Ton',
+            'per_kg' => 'Per Kg',
+            'per_cbm' => 'Per CBM',
+            default => $value,
+        };
     }
 }
