@@ -4,12 +4,12 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminActivityLog;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\AdminActivityLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Spatie\Permission\Models\Permission;
-use Spatie\Permission\Models\Role;
 
 class RoleManagementController extends Controller
 {
@@ -18,7 +18,7 @@ class RoleManagementController extends Controller
     ) {}
     public function stats(): JsonResponse
     {
-        $base = Role::query()->where('guard_name', 'web');
+        $base = $this->internalRolesQuery();
 
         return response()->json([
             'data' => [
@@ -34,7 +34,7 @@ class RoleManagementController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Role::query()->with('permissions')->where('guard_name', 'web');
+        $query = $this->internalRolesQuery()->with('permissions');
 
         if ($request->filled('search')) {
             $query->where('name', 'like', '%'.$request->search.'%');
@@ -47,7 +47,7 @@ class RoleManagementController extends Controller
             }
         }
 
-        $roles = $query->get()->map(fn (Role $role) => $this->transformRole($role));
+        $roles = $query->orderBy('name')->get()->map(fn (Role $role) => $this->transformRole($role));
 
         return response()->json(['data' => $roles]);
     }
@@ -154,10 +154,6 @@ class RoleManagementController extends Controller
             return response()->json(['message' => 'Role Super Admin tidak dapat dinonaktifkan.'], 422);
         }
 
-        if (User::role($role->name)->exists()) {
-            return response()->json(['message' => 'Role masih digunakan oleh user dan tidak dapat dinonaktifkan.'], 422);
-        }
-
         $role->update(['is_active' => false]);
 
         $this->activityLogger->log(
@@ -237,5 +233,13 @@ class RoleManagementController extends Controller
                 'occurred_at' => $log->occurred_at?->toIso8601String(),
             ])
             ->all();
+    }
+
+    private function internalRolesQuery()
+    {
+        return Role::query()
+            ->where('guard_name', 'web')
+            ->where('name', 'not like', 'vendor\_%')
+            ->whereNotIn('name', ['company_admin', 'ops_pic', 'finance_pic', 'viewer']);
     }
 }

@@ -3,14 +3,27 @@
 namespace Database\Seeders;
 
 use App\Enums\UserRole;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
-use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
+    /** @var array<string, string> */
+    private const INTERNAL_ROLE_DESCRIPTIONS = [
+        'super_admin' => 'Akses penuh ke seluruh modul dan pengaturan sistem.',
+        'operations' => 'Operasional booking, shipment, kontainer, dan vendor job order.',
+        'finance' => 'Invoice, pembayaran customer, serta vendor invoice dan payment.',
+        'sales' => 'Manajemen customer, pricing, dan vendor untuk tim penjualan.',
+        'customer_service' => 'Dukungan booking dan layanan customer.',
+        'billing' => 'Penerbitan invoice dan penagihan customer.',
+        'account_manager' => 'Pengelolaan akun customer dan monitoring transaksi.',
+        'management' => 'Akses baca dashboard, laporan, dan analitik untuk manajemen.',
+        'internal_viewer' => 'Akses baca terbatas untuk monitoring internal.',
+    ];
+
     public function run(): void
     {
         // Reset cached roles and permissions
@@ -138,6 +151,8 @@ class RolesAndPermissionsSeeder extends Seeder
             'view_dashboard', 'view_reports',
         ]);
 
+        $this->seedInternalRoleMeta();
+
         // ── Roles Customer ──
         $companyAdmin = Role::firstOrCreate(['name' => 'company_admin', 'guard_name' => 'web']);
         $companyAdmin->givePermissionTo([
@@ -237,5 +252,18 @@ class RolesAndPermissionsSeeder extends Seeder
         );
         $admin->syncRoles(['super_admin']);
         $admin->update(['feature_access' => UserRole::SuperAdmin->defaultFeatureAccess()]);
+    }
+
+    private function seedInternalRoleMeta(): void
+    {
+        foreach (self::INTERNAL_ROLE_DESCRIPTIONS as $name => $description) {
+            Role::query()
+                ->where('name', $name)
+                ->where('guard_name', 'web')
+                ->update([
+                    'description' => $description,
+                    'is_active' => true,
+                ]);
+        }
     }
 }
