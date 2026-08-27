@@ -29,6 +29,46 @@ final class BookingPersistenceService
     }
 
     /**
+     * Derive booking-level cargo category from package/container rows (FSD stores category per item).
+     */
+    public function deriveCargoCategoryId(array $data): ?int
+    {
+        foreach ($data['packages'] ?? [] as $pkg) {
+            if (! empty($pkg['cargo_category_id'])) {
+                return (int) $pkg['cargo_category_id'];
+            }
+        }
+        foreach ($data['containers'] ?? [] as $ctr) {
+            if (! empty($ctr['cargo_category_id'])) {
+                return (int) $ctr['cargo_category_id'];
+            }
+        }
+
+        if (! empty($data['cargo_category_id'])) {
+            return (int) $data['cargo_category_id'];
+        }
+
+        return null;
+    }
+
+    public function applyDerivedCargoCategory(Request $request): void
+    {
+        if ($request->filled('cargo_category_id')) {
+            return;
+        }
+
+        $derived = $this->deriveCargoCategoryId([
+            'packages' => $request->input('packages'),
+            'containers' => $request->input('containers'),
+            'cargo_category_id' => $request->input('cargo_category_id'),
+        ]);
+
+        if ($derived !== null) {
+            $request->merge(['cargo_category_id' => $derived]);
+        }
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function cargoFieldRules(bool $isDraft): array

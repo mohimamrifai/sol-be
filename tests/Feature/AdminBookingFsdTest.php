@@ -181,6 +181,69 @@ class AdminBookingFsdTest extends TestCase
             ->assertJsonCount(1, 'data');
     }
 
+    public function test_admin_list_includes_shipment_id_for_converted_booking(): void
+    {
+        $booking = $this->createBooking('approved');
+        $shipment = \App\Models\Shipment::create([
+            'booking_id' => $booking->id,
+            'company_id' => $booking->company_id,
+            'origin_location_id' => $booking->origin_location_id,
+            'destination_location_id' => $booking->destination_location_id,
+            'transport_mode_id' => $booking->transport_mode_id,
+            'service_type_id' => $booking->service_type_id,
+            'status' => 'created',
+            'created_by' => $this->admin->id,
+        ]);
+
+        Sanctum::actingAs($this->admin);
+
+        $response = $this->getJson('/api/admin/bookings?search='.$booking->booking_number)->assertOk();
+        $row = collect($response->json('data'))->firstWhere('id', $booking->id);
+
+        $this->assertNotNull($row);
+        $this->assertSame($shipment->id, $row['shipment_id']);
+        $this->assertTrue($row['shipment_exists']);
+    }
+
+    public function test_store_derives_cargo_category_from_packages(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $payload = [
+            'company_id' => $this->company->id,
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'shipment_coverage' => 'port_to_port',
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_address' => $this->shipperLocation->address,
+            'shipper_phone' => $this->shipperLocation->pic_mobile,
+            'shipper_location_id' => $this->shipperLocation->id,
+            'consignee_name' => 'Consignee',
+            'consignee_address' => 'Addr',
+            'consignee_phone' => '08222',
+            'is_draft' => 0,
+            'packages' => [
+                [
+                    'description' => 'Carton Elektronik',
+                    'package_type' => 'Carton',
+                    'piece_count' => 1,
+                    'weight_kg' => 120,
+                    'length' => 100,
+                    'width' => 80,
+                    'height' => 60,
+                    'cargo_category_id' => $this->generalCargo->id,
+                ],
+            ],
+        ];
+
+        $response = $this->postJson('/api/admin/bookings', $payload)->assertCreated();
+        $booking = Booking::findOrFail($response->json('data.id'));
+
+        $this->assertSame($this->generalCargo->id, $booking->cargo_category_id);
+    }
+
     private function createBooking(string $status): Booking
     {
         return Booking::create([

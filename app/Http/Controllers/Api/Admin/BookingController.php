@@ -35,7 +35,8 @@ class BookingController extends Controller
             'destinationLocation:id,name,code',
             'serviceType:id,name,code',
             'transportMode:id,name',
-        ])->withExists('shipment');
+        ])->withExists('shipment as shipment_exists')
+            ->with('shipment:id,booking_id');
 
         if ($request->filled('status')) {
             if ($request->status === 'converted') {
@@ -80,9 +81,15 @@ class BookingController extends Controller
             });
         }
 
-        return response()->json(
-            $query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15)
-        );
+        $paginated = $query->orderBy('created_at', 'desc')->paginate($request->per_page ?? 15);
+        $paginated->getCollection()->transform(function (Booking $booking) {
+            $booking->setAttribute('shipment_id', $booking->shipment?->id);
+            $booking->setAttribute('shipment_exists', (bool) ($booking->shipment_exists ?? $booking->shipment));
+
+            return $booking;
+        });
+
+        return response()->json($paginated);
     }
 
     public function stats(): JsonResponse
@@ -109,7 +116,7 @@ class BookingController extends Controller
     public function show(Booking $booking): JsonResponse
     {
         $booking->load([
-            'company', 'user', 'cargoCategory', 'dgClass',
+            'company.salesPic:id,name', 'user', 'cargoCategory', 'dgClass',
             'originLocation', 'destinationLocation',
             'shipperLocation:id,name', 'consigneeLocation:id,name',
             'transportMode', 'serviceType', 'containerType',
@@ -173,6 +180,7 @@ class BookingController extends Controller
             ]);
         }
         $this->bookingPersistence->mergeJsonFields($request);
+        $this->bookingPersistence->applyDerivedCargoCategory($request);
 
         $data = $request->validate(array_merge([
             'origin_location_id' => 'required|exists:locations,id',
@@ -237,7 +245,15 @@ class BookingController extends Controller
             'un_number' => ! empty($data['is_dangerous_goods']) ? ($data['un_number'] ?? null) : null,
         ];
 
-        unset($payload['additional_services'], $payload['attachments'], $payload['attachments_meta'], $payload['packages_msds_files'], $payload['containers_msds_files']);
+        unset(
+            $payload['additional_services'],
+            $payload['attachments'],
+            $payload['attachments_meta'],
+            $payload['packages_msds_files'],
+            $payload['containers_msds_files'],
+            $payload['packages'],
+            $payload['containers'],
+        );
         $booking->update($payload);
 
         $booking->additionalServices()->sync(
@@ -309,6 +325,7 @@ class BookingController extends Controller
             'destination_location_id' => 'required|exists:locations,id',
             'transport_mode_id' => 'required|exists:transport_modes,id',
             'service_type_id' => 'required|exists:service_types,id',
+            'shipment_coverage' => 'nullable|in:door_to_door,door_to_port,port_to_door,port_to_port',
             'cargo_category_id' => 'nullable|exists:cargo_categories,id',
             'container_type_id' => 'nullable|exists:container_types,id',
             'container_count' => 'nullable|integer|min:0',
@@ -328,6 +345,7 @@ class BookingController extends Controller
 
         $params = [
             ...$data,
+            'shipment_coverage' => $data['shipment_coverage'] ?? $request->input('shipment_coverage'),
             'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
         ];
 
@@ -347,6 +365,7 @@ class BookingController extends Controller
 
         $user = $request->user();
         $this->bookingPersistence->mergeJsonFields($request);
+        $this->bookingPersistence->applyDerivedCargoCategory($request);
 
         if (is_string($request->additional_services)) {
             $request->merge(['additional_services' => json_decode($request->additional_services, true)]);
@@ -417,6 +436,11 @@ class BookingController extends Controller
 
             unset($data['is_draft'], $data['attachments'], $data['attachments_meta'], $data['packages_msds_files'], $data['containers_msds_files']);
 
+            $packageRows = $data['packages'] ?? [];
+            $containerRows = $data['containers'] ?? [];
+            $additionalServiceRows = $data['additional_services'] ?? [];
+            unset($data['packages'], $data['containers'], $data['additional_services']);
+
             $booking = Booking::create([
                 ...$data,
                 'user_id' => $user->id,
@@ -426,19 +450,19 @@ class BookingController extends Controller
                 'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);
 
-            if (! empty($data['additional_services'])) {
-                foreach ($data['additional_services'] as $svc) {
+            if (! empty($additionalServiceRows)) {
+                foreach ($additionalServiceRows as $svc) {
                     $booking->additionalServices()->attach($svc['id'], [
                         'notes' => $svc['notes'] ?? null,
                     ]);
                 }
             }
 
-            if (! empty($data['packages'])) {
-                $this->bookingPersistence->syncPackages($booking, $request, $data['packages']);
+            if (! empty($packageRows)) {
+                $this->bookingPersistence->syncPackages($booking, $request, $packageRows);
             }
-            if (! empty($data['containers'])) {
-                $this->bookingPersistence->syncContainers($booking, $request, $data['containers']);
+            if (! empty($containerRows)) {
+                $this->bookingPersistence->syncContainers($booking, $request, $containerRows);
             }
             $this->bookingPersistence->syncAttachments(
                 $booking,
