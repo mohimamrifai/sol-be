@@ -4,10 +4,13 @@ namespace App\Services;
 
 use App\Models\Invoice;
 use App\Models\Payment;
+use App\Models\PaymentActivity;
+use App\Services\PaymentNumberService;
 use App\Support\SystemConfig;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class MidtransService
@@ -103,7 +106,10 @@ class MidtransService
                 'invoice_id' => $invoice->id,
                 'midtrans_order_id' => $orderId,
                 'amount' => $amount,
-                'status' => 'pending',
+                'status' => Payment::STATUS_PENDING,
+                'method' => Payment::METHOD_MIDTRANS,
+                'payment_type' => 'midtrans_snap',
+                'expired_at' => now()->addDay(),
                 'midtrans_response' => $body,
             ]);
         });
@@ -119,6 +125,39 @@ class MidtransService
             'token' => $token,
             'redirect_url' => $redirectUrl,
         ];
+    }
+
+    /**
+     * Assign payment number, ensure Midtrans metadata, and log link creation activity.
+     */
+    public function finalizeSnapPaymentRecord(
+        Payment $payment,
+        Invoice $invoice,
+        ?int $actorUserId = null,
+        string $activityDescription = 'Payment Link dibuat.',
+    ): void {
+        $paymentNumberService = app(PaymentNumberService::class);
+
+        $payment->forceFill([
+            'payment_number' => $payment->payment_number ?? $paymentNumberService->next((int) $invoice->company_id),
+            'method' => Payment::METHOD_MIDTRANS,
+            'payment_type' => $payment->payment_type ?: 'midtrans_snap',
+            'expired_at' => $payment->expired_at ?? now()->addDay(),
+        ])->save();
+
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $actorUserId,
+                'event_key' => 'payment_link_generated',
+                'description' => $activityDescription,
+                'meta' => [
+                    'order_id' => $payment->midtrans_order_id,
+                    'amount' => (float) $payment->amount,
+                ],
+                'occurred_at' => now(),
+            ]);
+        }
     }
 
     /**
@@ -246,6 +285,7 @@ class MidtransService
         $transactionStatus = $payload['transaction_status'] ?? null;
         $fraudStatus = $payload['fraud_status'] ?? null;
         $incomingStatus = $this->mapTransactionStatus($transactionStatus, $fraudStatus);
+        $previousStatus = $payment->status;
 
         // Monotonic guard: if payment is already in a success or refunded state,
         // do not let a late/cached notification downgrade it.
@@ -264,12 +304,19 @@ class MidtransService
             return;
         }
 
+        $transactionId = $payload['transaction_id'] ?? $payment->midtrans_transaction_id;
+
         $update = [
-            'midtrans_transaction_id' => $payload['transaction_id'] ?? $payment->midtrans_transaction_id,
+            'midtrans_transaction_id' => $transactionId,
             'payment_type' => $payload['payment_type'] ?? $payment->payment_type,
+            'method' => $payment->method ?: Payment::METHOD_MIDTRANS,
             'status' => $incomingStatus,
             'midtrans_response' => array_merge($payment->midtrans_response ?? [], $payload),
         ];
+
+        if ($transactionId) {
+            $update['manual_reference_number'] = $transactionId;
+        }
 
         // Only set paid_at on the first successful settlement. Late duplicate
         // notifications should not shift the original settlement timestamp.
@@ -279,9 +326,57 @@ class MidtransService
 
         $payment->update($update);
         $payment->refresh();
+        $payment->loadMissing('invoice');
+
+        if ($payment->isSuccess() && ! in_array($previousStatus, [Payment::STATUS_SUCCESS, Payment::STATUS_SETTLEMENT], true)) {
+            if (! $payment->payment_number) {
+                $paymentNumberService = app(PaymentNumberService::class);
+                $payment->forceFill([
+                    'payment_number' => $paymentNumberService->next((int) $payment->invoice->company_id),
+                ])->save();
+            }
+
+            if (Schema::hasTable('payment_activities')) {
+                PaymentActivity::create([
+                    'payment_id' => $payment->id,
+                    'event_key' => 'midtrans_notification',
+                    'description' => 'Midtrans mengirim notifikasi pembayaran.',
+                    'meta' => [
+                        'transaction_status' => $transactionStatus,
+                        'transaction_id' => $transactionId,
+                    ],
+                    'occurred_at' => now(),
+                ]);
+                PaymentActivity::create([
+                    'payment_id' => $payment->id,
+                    'event_key' => 'payment_settled',
+                    'description' => 'Pembayaran berhasil (Settlement).',
+                    'meta' => [
+                        'transaction_id' => $transactionId,
+                        'invoice_status' => $payment->invoice?->status,
+                    ],
+                    'occurred_at' => now(),
+                ]);
+            }
+        }
 
         if ($payment->isSuccess()) {
             $payment->invoice->syncStatusFromPayments();
+
+            if (Schema::hasTable('payment_activities') && $payment->invoice?->status === 'paid') {
+                $alreadyLogged = $payment->activities()
+                    ->where('event_key', 'invoice_paid')
+                    ->exists();
+                if (! $alreadyLogged) {
+                    PaymentActivity::create([
+                        'payment_id' => $payment->id,
+                        'event_key' => 'invoice_paid',
+                        'description' => 'Status Invoice menjadi Paid.',
+                        'meta' => ['invoice_status' => $payment->invoice->status],
+                        'occurred_at' => now(),
+                    ]);
+                }
+            }
         }
     }
 

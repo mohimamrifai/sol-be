@@ -100,6 +100,24 @@ class Invoice extends Model
         return max((float) $this->total_amount - $this->paidAmount(), 0);
     }
 
+    /**
+     * Invoice statuses that represent an open/unpaid issued invoice (legacy + current).
+     *
+     * @return list<string>
+     */
+    public static function openIssuedStatuses(): array
+    {
+        return ['issued', 'unpaid'];
+    }
+
+    public function assignOpenIssuedStatus(): void
+    {
+        $status = \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'sqlite'
+            ? 'unpaid'
+            : 'issued';
+        $this->update(['status' => $status]);
+    }
+
     public function syncStatusFromPayments(): void
     {
         if ($this->status === 'cancelled') {
@@ -125,6 +143,6 @@ class Invoice extends Model
             return;
         }
 
-        $this->update(['status' => 'issued']);
+        $this->assignOpenIssuedStatus();
     }
 }

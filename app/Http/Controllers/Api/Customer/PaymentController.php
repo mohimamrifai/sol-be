@@ -469,30 +469,12 @@ class PaymentController extends Controller
         $payment = Payment::where('midtrans_order_id', $result['order_id'])->first();
 
         if ($payment) {
-            $next = $this->paymentNumber->next((int) $invoice->company_id);
-
-            $expiryRaw = $result['expiry_time'] ?? null;
-            $expiryFromMidtrans = $expiryRaw !== null ? Carbon::parse($expiryRaw) : null;
-
-            $payment->forceFill([
-                'payment_number' => $next,
-                'method' => Payment::METHOD_MIDTRANS,
-                'expired_at' => $expiryFromMidtrans ?? now()->addDay(),
-            ])->save();
-
-            if (Schema::hasTable('payment_activities')) {
-                PaymentActivity::create([
-                    'payment_id' => $payment->id,
-                    'actor_user_id' => $user->id,
-                    'event_key' => 'payment_link_generated',
-                    'description' => 'Payment Link dibuat via Midtrans Snap.',
-                    'meta' => [
-                        'order_id' => $result['order_id'],
-                        'amount' => (float) $outstanding,
-                    ],
-                    'occurred_at' => now(),
-                ]);
-            }
+            $this->midtransService->finalizeSnapPaymentRecord(
+                $payment,
+                $invoice,
+                (int) $user->id,
+                'Payment Link dibuat via Midtrans Snap.'
+            );
         }
 
         return response()->json([

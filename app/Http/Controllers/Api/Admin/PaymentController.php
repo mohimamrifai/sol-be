@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
+use App\Models\PaymentProofAttachment;
 use App\Services\DocumentPdfService;
 use App\Services\MidtransService;
 use App\Services\PaymentNumberService;
@@ -13,6 +14,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class PaymentController extends Controller
@@ -29,9 +31,9 @@ class PaymentController extends Controller
 
         $paid = (clone $base)->where('status', 'paid')->count();
         $partiallyPaid = (clone $base)->where('status', 'partially_paid')->count();
-        $unpaid = (clone $base)->where('status', 'issued')->count();
+        $unpaid = (clone $base)->whereIn('status', Invoice::openIssuedStatuses())->count();
         $overdue = (clone $base)
-            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid']))
             ->whereNotNull('due_date')
             ->where('due_date', '<', $today)
             ->count();
@@ -50,7 +52,7 @@ class PaymentController extends Controller
     {
         $query = Invoice::query()
             ->with(['company:id,name,company_code'])
-            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid']))
             ->where('status', '!=', 'cancelled');
 
         if ($request->filled('company_id')) {
@@ -90,7 +92,7 @@ class PaymentController extends Controller
             return response()->json(['message' => 'Tidak ada izin untuk mencatat pembayaran.'], 403);
         }
 
-        if (! in_array($invoice->status, ['issued', 'partially_paid'], true)) {
+        if (! in_array($invoice->status, array_merge(Invoice::openIssuedStatuses(), ['partially_paid']), true)) {
             return response()->json(['message' => 'Invoice tidak dapat dibayar.'], 422);
         }
 
@@ -166,13 +168,13 @@ class PaymentController extends Controller
             $today = Carbon::today();
             $query->whereHas('invoice', function ($q) use ($invoiceStatus, $today) {
                 if ($invoiceStatus === 'unpaid') {
-                    $q->where('status', 'issued');
+                    $q->whereIn('status', Invoice::openIssuedStatuses());
                 } elseif ($invoiceStatus === 'partially_paid') {
                     $q->where('status', 'partially_paid');
                 } elseif ($invoiceStatus === 'paid') {
                     $q->where('status', 'paid');
                 } elseif ($invoiceStatus === 'overdue') {
-                    $q->whereIn('status', ['issued', 'partially_paid'])
+                    $q->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid']))
                         ->whereNotNull('due_date')
                         ->where('due_date', '<', $today);
                 }
@@ -231,7 +233,7 @@ class PaymentController extends Controller
     {
         $today = Carbon::today();
         if (
-            in_array($invoice->status, ['issued', 'partially_paid'], true)
+            in_array($invoice->status, array_merge(Invoice::openIssuedStatuses(), ['partially_paid']), true)
             && $invoice->due_date !== null
             && $invoice->due_date->lt($today)
         ) {
@@ -239,7 +241,7 @@ class PaymentController extends Controller
         }
 
         return match ($invoice->status) {
-            'issued' => 'unpaid',
+            'issued', 'unpaid' => 'unpaid',
             'partially_paid' => 'partially_paid',
             'paid' => 'paid',
             default => (string) $invoice->status,
@@ -353,6 +355,34 @@ class PaymentController extends Controller
         $isMidtrans = ($payment->method === 'midtrans') || str_contains((string) $payment->payment_type, 'midtrans')
             || ! empty($payment->midtrans_order_id);
 
+        $canRegenerate = $isMidtrans
+            && $outstanding > 0
+            && in_array($payment->status, ['pending', 'expired', 'failed', 'cancelled'], true)
+            && ! in_array($invoiceArStatus, ['paid'], true);
+
+        $supportingDocs = [];
+        $supportingDocs[] = [
+            'key' => 'payment_receipt',
+            'label' => 'Payment Receipt',
+            'available' => $payment->isSuccess(),
+        ];
+        if (Schema::hasTable('payment_proof_attachments')) {
+            foreach ($payment->proofAttachments as $attachment) {
+                $supportingDocs[] = [
+                    'key' => $attachment->category === 'other' ? 'other_document' : 'payment_proof',
+                    'label' => $attachment->category === 'other' ? 'Other Documents' : 'Payment Proof',
+                    'available' => true,
+                    'meta' => [
+                        'id' => $attachment->id,
+                        'original_name' => $attachment->original_name,
+                        'file_size' => $attachment->file_size,
+                        'mime_type' => $attachment->mime_type,
+                        'category' => $attachment->category,
+                    ],
+                ];
+            }
+        }
+
         $manualMeta = (array) ($midtransResponse);
         $payload = [
             'id' => $payment->id,
@@ -404,13 +434,15 @@ class PaymentController extends Controller
                 'midtrans_order_id' => $payment->midtrans_order_id,
                 'midtrans_transaction_id' => $payment->midtrans_transaction_id,
                 'midtrans_status' => $payment->status,
-                'can_regenerate' => in_array($payment->status, ['pending', 'expire', 'cancel', 'failure'], true)
-                    && $outstanding > 0,
+                'can_regenerate' => $canRegenerate,
             ] : null,
+            'supporting_documents' => $supportingDocs,
             'activity_timeline' => $timeline,
             'actions' => [
                 'can_record_payment' => in_array($invoiceArStatus, ['unpaid', 'partially_paid', 'overdue'], true),
                 'can_print_receipt' => $invoiceArStatus === 'paid' || $payment->isSuccess(),
+                'can_copy_link' => $isMidtrans && ! empty($midtransResponse['redirect_url']),
+                'can_regenerate_link' => $canRegenerate,
             ],
         ];
 
@@ -442,19 +474,19 @@ class PaymentController extends Controller
         $today = Carbon::today();
         $query = Invoice::query()
             ->with(['company:id,name,company_code', 'payments' => fn ($q) => $q->orderByDesc('paid_at')->limit(1)])
-            ->whereIn('status', ['issued', 'partially_paid', 'paid'])
+            ->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid', 'paid']))
             ->where('status', '!=', 'cancelled');
 
         if ($request->filled('invoice_status')) {
             $st = $request->string('invoice_status')->toString();
             if ($st === 'unpaid') {
-                $query->where('status', 'issued');
+                $query->whereIn('status', Invoice::openIssuedStatuses());
             } elseif ($st === 'partially_paid') {
                 $query->where('status', 'partially_paid');
             } elseif ($st === 'paid') {
                 $query->where('status', 'paid');
             } elseif ($st === 'overdue') {
-                $query->whereIn('status', ['issued', 'partially_paid'])
+                $query->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid']))
                     ->whereNotNull('due_date')
                     ->where('due_date', '<', $today);
             }
@@ -564,10 +596,88 @@ class PaymentController extends Controller
             ], 502);
         }
 
+        $payment = Payment::where('midtrans_order_id', $result['order_id'])->first();
+        if ($payment) {
+            $midtrans->finalizeSnapPaymentRecord(
+                $payment,
+                $invoice,
+                (int) $request->user()->id,
+                'Payment Link dibuat oleh admin.'
+            );
+        }
+
         return response()->json([
             'message' => 'Link pembayaran berhasil dibuat.',
             'data' => [
                 'payment_url' => $result['redirect_url'],
+                'payment_id' => $payment?->id,
+                'order_id' => $result['order_id'],
+            ],
+        ], 201);
+    }
+
+    /**
+     * Regenerate Midtrans Payment Link when previous link is pending/expired/cancelled.
+     */
+    public function regeneratePaymentLink(Request $request, Payment $payment, MidtransService $midtrans): JsonResponse
+    {
+        if (! $request->user()->can('manage_payments')) {
+            return response()->json(['message' => 'Tidak ada izin untuk mengelola pembayaran.'], 403);
+        }
+
+        $payment->load('invoice.company');
+        $invoice = $payment->invoice;
+
+        if (! $invoice) {
+            return response()->json(['message' => 'Invoice tidak ditemukan.'], 404);
+        }
+
+        if ($invoice->status === 'paid') {
+            return response()->json(['message' => 'Invoice ini sudah lunas.'], 422);
+        }
+
+        $outstanding = $invoice->outstandingAmount();
+        if ($outstanding <= 0) {
+            return response()->json(['message' => 'Invoice ini sudah lunas.'], 422);
+        }
+
+        if (! in_array($payment->status, ['pending', 'expired', 'failed', 'cancelled'], true)) {
+            return response()->json(['message' => 'Payment Link hanya dapat di-regenerate jika status Pending, Expired, atau Cancel.'], 422);
+        }
+
+        $company = $invoice->company;
+        $customerDetails = [
+            'first_name' => $company?->name ?? 'Customer',
+            'name' => $company?->name ?? 'Customer',
+            'email' => $company?->email ?? '',
+            'phone' => $company?->phone ?? '',
+        ];
+
+        try {
+            $result = $midtrans->createSnapTransaction($invoice, $customerDetails, $outstanding);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Gagal membuat ulang link pembayaran Midtrans.',
+                'error' => $e->getMessage(),
+            ], 502);
+        }
+
+        $newPayment = Payment::where('midtrans_order_id', $result['order_id'])->first();
+        if ($newPayment) {
+            $midtrans->finalizeSnapPaymentRecord(
+                $newPayment,
+                $invoice,
+                (int) $request->user()->id,
+                'Payment Link di-regenerate oleh admin.'
+            );
+        }
+
+        return response()->json([
+            'message' => 'Payment Link berhasil di-regenerate.',
+            'data' => [
+                'payment_url' => $result['redirect_url'],
+                'payment_id' => $newPayment?->id,
+                'order_id' => $result['order_id'],
             ],
         ], 201);
     }
@@ -585,6 +695,24 @@ class PaymentController extends Controller
             $midtrans->syncPaymentFromMidtrans($payment);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $payment->refresh();
+
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $request->user()->id,
+                'event_key' => $payment->isSuccess() ? 'payment_settled' : 'midtrans_sync',
+                'description' => $payment->isSuccess()
+                    ? 'Pembayaran berhasil (Settlement).'
+                    : 'Status disinkronkan dari Midtrans.',
+                'meta' => [
+                    'status' => $payment->status,
+                    'transaction_id' => $payment->midtrans_transaction_id,
+                ],
+                'occurred_at' => now(),
+            ]);
         }
 
         $payment->load(['invoice.company', 'invoice.shipment']);
@@ -692,7 +820,7 @@ class PaymentController extends Controller
     public function overdueInvoices(Request $request): JsonResponse
     {
         $query = Invoice::with(['company:id,name', 'shipment:id,waybill_number'])
-            ->whereIn('status', ['issued', 'partially_paid'])
+            ->whereIn('status', array_merge(Invoice::openIssuedStatuses(), ['partially_paid']))
             ->whereNotNull('due_date')
             ->where('due_date', '<', now()->toDateString());
 
@@ -703,5 +831,97 @@ class PaymentController extends Controller
         $invoices = $query->orderBy('due_date')->paginate($request->per_page ?? 15);
 
         return response()->json($invoices);
+    }
+
+    public function proofPreview(Request $request, Payment $payment): SymfonyResponse
+    {
+        return $this->streamProofAttachment($request, $payment, forceDownload: false);
+    }
+
+    public function proofDownload(Request $request, Payment $payment): SymfonyResponse
+    {
+        return $this->streamProofAttachment($request, $payment, forceDownload: true);
+    }
+
+    public function storeProof(Request $request, Payment $payment): JsonResponse
+    {
+        if (! $request->user()?->can('manage_payments')) {
+            return response()->json(['message' => 'Tidak ada izin untuk mengelola pembayaran.'], 403);
+        }
+
+        if (! Schema::hasTable('payment_proof_attachments')) {
+            return response()->json(['message' => 'Fitur dokumen pendukung belum tersedia.'], 422);
+        }
+
+        $validated = $request->validate([
+            'proof_file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:5120'],
+            'category' => ['nullable', 'string', 'in:payment_proof,other'],
+        ]);
+
+        $payment->loadMissing('invoice.company');
+        $companyId = $payment->invoice?->company_id;
+        if (! $companyId) {
+            return response()->json(['message' => 'Invoice tidak ditemukan.'], 404);
+        }
+
+        $file = $request->file('proof_file');
+        $category = $validated['category'] ?? 'payment_proof';
+        $path = $file->store('payment-proofs/'.$companyId, 'public');
+
+        $attachment = PaymentProofAttachment::create([
+            'payment_id' => $payment->id,
+            'uploaded_by' => $request->user()->id,
+            'file_path' => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
+            'file_size' => $file->getSize() ?: 0,
+            'category' => $category,
+        ]);
+
+        if (Schema::hasTable('payment_activities')) {
+            PaymentActivity::create([
+                'payment_id' => $payment->id,
+                'actor_user_id' => $request->user()->id,
+                'event_key' => 'document_uploaded',
+                'description' => $category === 'other'
+                    ? 'Dokumen pendukung lain diunggah.'
+                    : 'Bukti pembayaran diunggah.',
+                'meta' => ['attachment_id' => $attachment->id],
+                'occurred_at' => now(),
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Dokumen berhasil diunggah.',
+            'data' => $attachment,
+        ], 201);
+    }
+
+    private function streamProofAttachment(Request $request, Payment $payment, bool $forceDownload): SymfonyResponse
+    {
+        if (! Schema::hasTable('payment_proof_attachments')) {
+            abort(404, 'Bukti pembayaran belum diunggah.');
+        }
+
+        $attachmentId = $request->integer('attachment_id') ?: null;
+        $query = $payment->proofAttachments();
+        $attachment = $attachmentId
+            ? $query->where('id', $attachmentId)->first()
+            : $query->latest('id')->first();
+
+        if (! $attachment || ! Storage::disk('public')->exists($attachment->file_path)) {
+            abort(404, 'Bukti pembayaran tidak ditemukan.');
+        }
+
+        $content = Storage::disk('public')->get($attachment->file_path);
+        $filename = $attachment->original_name ?: 'payment-proof';
+        $mime = $attachment->mime_type ?: 'application/octet-stream';
+
+        return response($content, 200, [
+            'Content-Type' => $mime,
+            'Content-Length' => (string) strlen($content),
+            'Content-Disposition' => ($forceDownload ? 'attachment' : 'inline')
+                .'; filename="'.addslashes($filename).'"',
+        ]);
     }
 }

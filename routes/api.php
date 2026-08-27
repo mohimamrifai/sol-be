@@ -278,7 +278,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('payments/overdue-invoices', [AdminPaymentController::class, 'overdueInvoices']);
         Route::post('invoices/{invoice}/record-payment', [AdminPaymentController::class, 'recordPayment']);
         Route::post('payments/{payment}/sync-midtrans', [AdminPaymentController::class, 'syncMidtrans']);
+        Route::post('payments/{payment}/regenerate-payment-link', [AdminPaymentController::class, 'regeneratePaymentLink']);
         Route::post('payments/{payment}/verify-manual', [AdminPaymentController::class, 'verifyManual']);
+        Route::post('payments/{payment}/proof', [AdminPaymentController::class, 'storeProof']);
+        Route::get('payments/{payment}/proof-preview', [AdminPaymentController::class, 'proofPreview']);
+        Route::get('payments/{payment}/proof-download', [AdminPaymentController::class, 'proofDownload']);
         Route::get('payments/{payment}/receipt', [AdminPaymentController::class, 'receipt']);
         Route::get('payments/{payment}', [AdminPaymentController::class, 'show']);
 
