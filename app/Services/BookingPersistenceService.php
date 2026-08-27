@@ -101,6 +101,10 @@ final class BookingPersistenceService
             }
         }
 
+        if (empty($data['shipper_location_id'])) {
+            $errors['shipper_location_id'][] = 'Customer Location wajib dipilih.';
+        }
+
         if (($data['consignee_type'] ?? null) === 'customer_location' && empty($data['consignee_location_id'])) {
             $errors['consignee_location_id'][] = 'Customer Location wajib dipilih.';
         }
@@ -166,6 +170,9 @@ final class BookingPersistenceService
                 }
                 if (empty($ctr['cargo_category_id'])) {
                     $errors["containers.$i.cargo_category_id"][] = 'Cargo Category wajib diisi.';
+                }
+                if (empty($ctr['cargo_description'])) {
+                    $errors["containers.$i.cargo_description"][] = 'Cargo Description wajib diisi.';
                 }
                 if ($this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null)) {
                     $errors = array_merge($errors, $this->validateDgItemFields($ctr, "containers.$i", $request, "containers_msds_files.$i"));

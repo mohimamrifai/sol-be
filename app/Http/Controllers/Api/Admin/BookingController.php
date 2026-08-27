@@ -15,6 +15,8 @@ use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class BookingController extends Controller
 {
@@ -38,12 +40,15 @@ class BookingController extends Controller
         if ($request->filled('status')) {
             if ($request->status === 'converted') {
                 $query->whereHas('shipment');
+            } elseif ($request->status === 'submitted') {
+                $query->whereIn('status', ['submitted', 'under_review'])->whereDoesntHave('shipment');
+            } elseif ($request->status === 'confirmed') {
+                $query->whereIn('status', ['approved', 'confirmed'])->whereDoesntHave('shipment');
             } else {
-                $status = match ($request->status) {
-                    'confirmed' => 'approved',
-                    default => $request->status,
-                };
-                $query->where('status', $status)->whereDoesntHave('shipment');
+                $query->where('status', $request->status);
+                if (! in_array($request->status, ['cancelled', 'rejected'], true)) {
+                    $query->whereDoesntHave('shipment');
+                }
             }
         }
         if ($request->filled('company_id')) {
@@ -71,7 +76,6 @@ class BookingController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('booking_number', 'like', "%{$search}%")
-                    ->orWhere('cargo_description', 'like', "%{$search}%")
                     ->orWhereHas('company', fn ($cq) => $cq->where('name', 'like', "%{$search}%"));
             });
         }
@@ -93,8 +97,8 @@ class BookingController extends Controller
         return response()->json([
             'data' => [
                 'draft' => (int) ($counts['draft'] ?? 0),
-                'submitted' => (int) ($counts['submitted'] ?? 0),
-                'confirmed' => (int) ($counts['approved'] ?? 0),
+                'submitted' => (int) (($counts['submitted'] ?? 0) + ($counts['under_review'] ?? 0)),
+                'confirmed' => (int) (($counts['approved'] ?? 0) + ($counts['confirmed'] ?? 0)),
                 'converted' => $converted,
                 'rejected' => (int) ($counts['rejected'] ?? 0),
                 'cancelled' => (int) ($counts['cancelled'] ?? 0),
@@ -107,6 +111,7 @@ class BookingController extends Controller
         $booking->load([
             'company', 'user', 'cargoCategory', 'dgClass',
             'originLocation', 'destinationLocation',
+            'shipperLocation:id,name', 'consigneeLocation:id,name',
             'transportMode', 'serviceType', 'containerType',
             'additionalServices', 'shipment.createdByUser:id,name', 'approvedByUser:id,name',
             'activities.actor:id,name',
@@ -158,8 +163,8 @@ class BookingController extends Controller
             return response()->json(['message' => 'Booking yang sudah memiliki shipment tidak bisa diubah.'], 422);
         }
 
-        if ($booking->status === 'cancelled') {
-            return response()->json(['message' => 'Booking yang sudah dibatalkan tidak bisa diubah.'], 422);
+        if (in_array($booking->status, ['cancelled', 'rejected'], true)) {
+            return response()->json(['message' => 'Booking dengan status ini tidak bisa diubah.'], 422);
         }
 
         if (is_string($request->additional_services)) {
@@ -203,6 +208,7 @@ class BookingController extends Controller
             'msds_file' => 'nullable|file|mimes:pdf|max:5120',
             'equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'temperature' => 'nullable|numeric',
+            'notes' => 'nullable|string|max:5000',
         ], $this->bookingPersistence->cargoFieldRules(false)));
 
         if ($cargoErrors = $this->bookingPersistence->validateCargoRules($request, $data, false, (int) $booking->company_id)) {
@@ -259,6 +265,7 @@ class BookingController extends Controller
         $booking->load([
             'company', 'user', 'cargoCategory', 'dgClass',
             'originLocation', 'destinationLocation',
+            'shipperLocation:id,name', 'consigneeLocation:id,name',
             'transportMode', 'serviceType', 'containerType',
             'additionalServices', 'shipment', 'approvedByUser:id,name',
             'packages', 'containers', 'attachments',
@@ -384,6 +391,7 @@ class BookingController extends Controller
             'msds_file' => 'nullable|file|mimes:pdf|max:5120',
             'equipment_condition' => 'nullable|in:CLEAN,RESIDUAL',
             'temperature' => 'nullable|numeric',
+            'notes' => 'nullable|string|max:5000',
         ], $this->bookingPersistence->cargoFieldRules($isDraft)));
 
         if ($cargoErrors = $this->bookingPersistence->validateCargoRules($request, $data, $isDraft, (int) $data['company_id'])) {
@@ -412,7 +420,7 @@ class BookingController extends Controller
             $booking = Booking::create([
                 ...$data,
                 'user_id' => $user->id,
-                'status' => $isDraft ? 'draft' : 'under_review',
+                'status' => $isDraft ? 'draft' : 'submitted',
                 'estimated_price' => $estimate['estimated_price'] ?? null,
                 'msds_file' => $msdsPath,
                 'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
@@ -502,7 +510,7 @@ class BookingController extends Controller
             return response()->json(['message' => 'Booking draft sudah expired.'], 422);
         }
 
-        $booking->update(['status' => 'under_review', 'draft_expires_at' => null]);
+        $booking->update(['status' => 'submitted', 'draft_expires_at' => null]);
         $this->logBookingActivity($booking, 'booking_submitted', 'Booking disubmit.', $request->user());
 
         return response()->json([
@@ -517,7 +525,7 @@ class BookingController extends Controller
             return response()->json(['message' => 'Booking yang sudah dikonversi tidak dapat dihapus.'], 422);
         }
 
-        if (! in_array($booking->status, ['draft', 'cancelled', 'rejected'])) {
+        if ($booking->status !== 'draft') {
             return response()->json(['message' => 'Hanya booking draft yang dapat dihapus.'], 422);
         }
 
@@ -531,7 +539,7 @@ class BookingController extends Controller
      */
     public function reject(Request $request, Booking $booking): JsonResponse
     {
-        if (! in_array($booking->status, ['submitted', 'under_review', 'confirmed'])) {
+        if (! in_array($booking->status, ['submitted', 'under_review'], true)) {
             return response()->json(['message' => 'Booking tidak dalam status yang bisa ditolak.'], 422);
         }
 
@@ -541,6 +549,8 @@ class BookingController extends Controller
             'status' => 'rejected',
             'rejection_reason' => $request->reason,
         ]);
+
+        $this->logBookingActivity($booking, 'booking_rejected', 'Booking ditolak.', $request->user());
 
         return response()->json([
             'message' => 'Booking berhasil ditolak.',
@@ -557,30 +567,54 @@ class BookingController extends Controller
             return $resp;
         }
 
+        $booking->load(['packages', 'containers', 'additionalServices', 'attachments']);
+
         $newBooking = DB::transaction(function () use ($booking, $request) {
             $copy = $booking->replicate([
                 'booking_number', 'status', 'approved_by', 'approved_at', 'rejection_reason',
+                'estimated_price',
             ]);
             $copy->status = 'draft';
             $copy->user_id = $request->user()->id;
             $copy->approved_by = null;
             $copy->approved_at = null;
             $copy->rejection_reason = null;
+            $copy->estimated_price = null;
             $copy->draft_expires_at = SystemConfig::draftExpiresAt();
             $copy->save();
 
             foreach ($booking->packages as $pkg) {
-                $copy->packages()->create($pkg->only([
-                    'sequence', 'description', 'length', 'width', 'height', 'weight_kg', 'volume_cbm',
-                    'piece_count', 'package_type', 'remark', 'is_dangerous_goods', 'dg_class_id', 'un_number',
-                ]));
+                $pkgClone = $pkg->replicate();
+                $pkgClone->booking_id = $copy->id;
+                if ($pkgClone->msds_file_path) {
+                    $pkgClone->msds_file_path = $this->duplicateStorageFile($pkgClone->msds_file_path, 'msds_files');
+                }
+                $pkgClone->save();
             }
 
             foreach ($booking->containers as $container) {
-                $copy->containers()->create($container->only([
-                    'sequence', 'container_type_id', 'quantity', 'container_number', 'seal_number',
-                    'gross_weight_kg', 'volume_cbm', 'cargo_description', 'remark',
-                ]));
+                $ctrClone = $container->replicate();
+                $ctrClone->booking_id = $copy->id;
+                if ($ctrClone->msds_file_path) {
+                    $ctrClone->msds_file_path = $this->duplicateStorageFile($ctrClone->msds_file_path, 'msds_files');
+                }
+                $ctrClone->save();
+            }
+
+            foreach ($booking->attachments as $attachment) {
+                $newPath = $this->duplicateStorageFile($attachment->file_path, 'booking_attachments');
+                if ($newPath) {
+                    $copy->attachments()->create([
+                        'uploaded_by' => $request->user()->id,
+                        'file_path' => $newPath,
+                        'original_name' => $attachment->original_name,
+                        'mime_type' => $attachment->mime_type,
+                        'file_size' => $attachment->file_size,
+                        'category' => $attachment->category,
+                        'document_type' => $attachment->document_type,
+                        'remarks' => $attachment->remarks,
+                    ]);
+                }
             }
 
             $syncData = $booking->additionalServices->mapWithKeys(fn ($svc) => [
@@ -607,7 +641,7 @@ class BookingController extends Controller
      */
     public function convertToShipment(Request $request, Booking $booking): JsonResponse
     {
-        if ($booking->status !== 'approved') {
+        if (! in_array($booking->status, ['approved', 'confirmed'], true)) {
             return response()->json(['message' => 'Hanya booking yang sudah disetujui yang bisa dikonversi.'], 422);
         }
 
@@ -662,6 +696,20 @@ class BookingController extends Controller
     private function logBookingActivity(Booking $booking, string $type, string $title, ?User $actor): void
     {
         $booking->recordActivity($type, $title, null, null, $actor);
+    }
+
+    private function duplicateStorageFile(?string $path, string $directory): ?string
+    {
+        if (! $path || ! Storage::disk('public')->exists($path)) {
+            return $path;
+        }
+
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        $newPath = trim($directory, '/').'/'.Str::uuid().($extension ? '.'.$extension : '');
+
+        Storage::disk('public')->copy($path, $newPath);
+
+        return $newPath;
     }
 
     private function buildShipperSnapshot(Booking $booking): array

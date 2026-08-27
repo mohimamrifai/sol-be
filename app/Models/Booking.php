@@ -122,6 +122,16 @@ class Booking extends Model
         return $this->belongsTo(Location::class, 'destination_location_id');
     }
 
+    public function shipperLocation(): BelongsTo
+    {
+        return $this->belongsTo(CustomerLocation::class, 'shipper_location_id');
+    }
+
+    public function consigneeLocation(): BelongsTo
+    {
+        return $this->belongsTo(CustomerLocation::class, 'consignee_location_id');
+    }
+
     public function transportMode(): BelongsTo
     {
         return $this->belongsTo(TransportMode::class);
@@ -254,29 +264,57 @@ class Booking extends Model
         $totalVolume = 0.0;
         $grossWeight = 0.0;
 
-        $packages = $this->packages()->get(['volume_cbm', 'weight_kg']);
+        $packages = $this->packages()->get(['length', 'width', 'height', 'volume_cbm', 'weight_kg', 'piece_count']);
         if ($packages->isNotEmpty()) {
-            $totalVolume = (float) $packages->sum(fn ($p) => (float) ($p->volume_cbm ?? 0));
-            $grossWeight = (float) $packages->sum(fn ($p) => (float) ($p->weight_kg ?? 0));
-        } else {
-            $containers = $this->containers()->get(['volume_cbm', 'gross_weight_kg', 'quantity']);
-            if ($containers->isNotEmpty()) {
-                $totalVolume = (float) $containers->sum(
-                    fn ($c) => ((float) ($c->volume_cbm ?? 0)) * ((int) ($c->quantity ?? 1))
-                );
-                $grossWeight = (float) $containers->sum(
-                    fn ($c) => ((float) ($c->gross_weight_kg ?? 0)) * ((int) ($c->quantity ?? 1))
-                );
-            } else {
-                $length = (float) ($this->length ?? 0);
-                $width = (float) ($this->width ?? 0);
-                $height = (float) ($this->height ?? 0);
+            $volumeWeight = 0.0;
+            $chargeableWeight = 0.0;
 
-                $totalVolume = $length > 0 && $width > 0 && $height > 0
-                    ? round(($length * $width * $height) / 1_000_000, 4)
-                    : (float) ($this->estimated_cbm ?? 0);
-                $grossWeight = (float) ($this->estimated_weight ?? 0);
+            foreach ($packages as $package) {
+                $length = (float) ($package->length ?? 0);
+                $width = (float) ($package->width ?? 0);
+                $height = (float) ($package->height ?? 0);
+                $qty = max((int) ($package->piece_count ?? 1), 1);
+                $actualWeight = (float) ($package->weight_kg ?? 0);
+
+                $packageVolume = (float) ($package->volume_cbm ?? 0);
+                if ($packageVolume <= 0 && $length > 0 && $width > 0 && $height > 0) {
+                    $packageVolume = (($length * $width * $height) / 1_000_000) * $qty;
+                }
+
+                $packageVolumeWeight = $length > 0 && $width > 0 && $height > 0
+                    ? (($length * $width * $height) / 5000) * $qty
+                    : 0.0;
+
+                $totalVolume += $packageVolume;
+                $grossWeight += $actualWeight;
+                $volumeWeight += $packageVolumeWeight;
+                $chargeableWeight += max($actualWeight, $packageVolumeWeight);
             }
+
+            $this->total_volume_cbm = round($totalVolume, 4);
+            $this->volume_weight_kg = round($volumeWeight, 4);
+            $this->chargeable_weight_kg = round($chargeableWeight, 4);
+
+            return;
+        }
+
+        $containers = $this->containers()->get(['volume_cbm', 'gross_weight_kg', 'quantity']);
+        if ($containers->isNotEmpty()) {
+            $totalVolume = (float) $containers->sum(
+                fn ($c) => ((float) ($c->volume_cbm ?? 0)) * ((int) ($c->quantity ?? 1))
+            );
+            $grossWeight = (float) $containers->sum(
+                fn ($c) => ((float) ($c->gross_weight_kg ?? 0)) * ((int) ($c->quantity ?? 1))
+            );
+        } else {
+            $length = (float) ($this->length ?? 0);
+            $width = (float) ($this->width ?? 0);
+            $height = (float) ($this->height ?? 0);
+
+            $totalVolume = $length > 0 && $width > 0 && $height > 0
+                ? round(($length * $width * $height) / 1_000_000, 4)
+                : (float) ($this->estimated_cbm ?? 0);
+            $grossWeight = (float) ($this->estimated_weight ?? 0);
         }
 
         $this->total_volume_cbm = round($totalVolume, 4);
