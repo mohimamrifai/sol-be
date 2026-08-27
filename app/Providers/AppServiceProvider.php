@@ -4,8 +4,10 @@ namespace App\Providers;
 
 use App\Listeners\UpdateLastLoginAt;
 use App\Models\Booking;
+use App\Models\ContainerMaintenance;
 use App\Models\Shipment;
 use App\Observers\BookingObserver;
+use App\Observers\ContainerMaintenanceObserver;
 use App\Observers\ShipmentObserver;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Support\Facades\Event;
@@ -28,6 +30,7 @@ class AppServiceProvider extends ServiceProvider
     {
         Booking::observe(BookingObserver::class);
         Shipment::observe(ShipmentObserver::class);
+        ContainerMaintenance::observe(ContainerMaintenanceObserver::class);
 
         Event::listen(Login::class, UpdateLastLoginAt::class);
     }

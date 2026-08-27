@@ -16,6 +16,7 @@ class OperationTaskService
     public function __construct(
         private AdminActivityLogger $activityLogger,
         private ProofOfDeliveryService $proofOfDeliveryService,
+        private ContainerAssetService $containerAssetService,
     ) {}
     public function ensureTasksForShipment(Shipment $shipment): void
     {
@@ -116,6 +117,8 @@ class OperationTaskService
                 }
             }
         }
+
+        $this->containerAssetService->handleOperationTaskCompleted($task, $actorUserId);
 
         $this->activityLogger->log(
             'operation_task',

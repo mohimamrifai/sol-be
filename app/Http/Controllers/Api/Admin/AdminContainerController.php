@@ -6,7 +6,9 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\ContainerAsset;
+use App\Models\ContainerMaintenance;
 use App\Models\ContainerType;
+use App\Services\ContainerAssetService;
 use App\Services\ContainerFreeStorageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,7 +17,9 @@ class AdminContainerController extends Controller
 {
     public function __construct(
         private readonly ContainerFreeStorageService $containerFreeStorageService,
+        private readonly ContainerAssetService $containerAssetService,
     ) {}
+
     public function stats(): JsonResponse
     {
         $base = ContainerAsset::query();
@@ -82,14 +86,16 @@ class AdminContainerController extends Controller
             'maintenances.vendor:id,name',
         ]);
 
-        $activeContainer = $containerAsset->activeShipmentContainer();
-        $activeShipment = $activeContainer?->shipment?->load([
-            'company:id,name',
-            'serviceType:id,name,code',
-        ]);
+        $assignments = $this->containerAssetService->buildCurrentAssignments($containerAsset);
 
         return response()->json([
             'data' => array_merge($this->transformListRow($containerAsset), [
+                'header' => [
+                    'container_number' => $containerAsset->container_number,
+                    'container_type' => $containerAsset->containerType?->name,
+                    'ownership' => $containerAsset->ownership,
+                    'status' => $containerAsset->status,
+                ],
                 'general' => [
                     'container_number' => $containerAsset->container_number,
                     'container_type_id' => $containerAsset->container_type_id,
@@ -104,24 +110,17 @@ class AdminContainerController extends Controller
                     'manufacture_year' => $containerAsset->manufacture_year,
                     'remark' => $containerAsset->remark,
                 ],
-                'current_assignment' => $activeShipment ? [
-                    'shipment_id' => $activeShipment->id,
-                    'shipment_number' => $activeShipment->shipment_number,
-                    'customer' => $activeShipment->company?->name,
-                    'service' => $activeShipment->serviceType?->name,
-                    'status' => $activeShipment->status,
-                    'departure' => $activeShipment->estimated_departure?->toDateString(),
-                    'eta' => $activeShipment->estimated_arrival?->toDateString(),
-                ] : null,
-                'utilization' => $this->buildUtilization($containerAsset, $activeContainer, $activeShipment),
+                'current_assignments' => $assignments,
+                'current_assignment' => $assignments[0] ?? null,
+                'utilization' => $this->containerAssetService->buildUtilization($containerAsset),
                 'movements' => $containerAsset->movements->map(fn ($m) => [
                     'id' => $m->id,
                     'occurred_at' => $m->occurred_at?->toIso8601String(),
                     'activity' => $m->activity,
-                    'location_from' => $m->location_from,
-                    'location_to' => $m->location_to,
+                    'location' => $m->location_to ?? $m->location_from ?? $m->yard?->name,
+                    'shipment_id' => $m->shipment_id,
                     'shipment_number' => $m->shipment?->shipment_number,
-                    'created_by' => $m->createdBy?->name,
+                    'updated_by' => $m->createdBy?->name,
                 ]),
                 'maintenances' => $containerAsset->maintenances->map(fn ($m) => [
                     'id' => $m->id,
@@ -131,6 +130,7 @@ class AdminContainerController extends Controller
                     'remark' => $m->remark,
                     'status' => $m->status,
                 ]),
+                'activity_log' => $this->containerAssetService->activityLog($containerAsset),
             ]),
         ]);
     }
@@ -150,37 +150,110 @@ class AdminContainerController extends Controller
         $type = ContainerType::find($data['container_type_id']);
         $asset = ContainerAsset::create([
             ...$data,
+            'container_number' => strtoupper(trim($data['container_number'])),
             'ownership' => 'company',
             'vendor_id' => null,
             'status' => 'available',
-            'max_payload_kg' => $data['max_payload_kg'] ?? $type?->max_payload_kg,
-            'max_capacity_cbm' => $data['max_capacity_cbm'] ?? $type?->max_capacity_cbm,
+            'max_payload_kg' => $data['max_payload_kg'] ?? $type?->capacity_weight,
+            'max_capacity_cbm' => $data['max_capacity_cbm'] ?? $type?->capacity_cbm,
         ]);
 
-        return response()->json(['message' => 'Container perusahaan berhasil dibuat.', 'data' => $this->transformListRow($asset->fresh(['containerType', 'currentYard']))], 201);
+        $this->containerAssetService->log(
+            $asset,
+            'Container perusahaan '.$asset->container_number.' dibuat.',
+            'created',
+            $request->user()?->id,
+        );
+
+        $this->containerAssetService->onRegistered($asset->fresh(['currentYard']), $request->user()?->id);
+
+        return response()->json([
+            'message' => 'Container perusahaan berhasil dibuat.',
+            'data' => $this->transformListRow($asset->fresh(['containerType', 'currentYard'])),
+        ], 201);
     }
 
     public function update(Request $request, ContainerAsset $containerAsset): JsonResponse
     {
         $data = $request->validate([
+            'container_type_id' => 'sometimes|exists:container_types,id',
             'remark' => 'nullable|string|max:5000',
         ]);
 
         $containerAsset->update($data);
 
-        return response()->json(['message' => 'Container diperbarui.', 'data' => $this->transformListRow($containerAsset->fresh(['containerType', 'currentYard']))]);
+        $this->containerAssetService->log(
+            $containerAsset,
+            'Data container '.$containerAsset->container_number.' diperbarui.',
+            'updated',
+            $request->user()?->id,
+            $data,
+        );
+
+        return response()->json([
+            'message' => 'Container diperbarui.',
+            'data' => $this->transformListRow($containerAsset->fresh(['containerType', 'currentYard'])),
+        ]);
+    }
+
+    public function storeMaintenance(Request $request, ContainerAsset $containerAsset): JsonResponse
+    {
+        $data = $request->validate([
+            'maintenance_type' => 'required|in:repair,inspection,cleaning',
+            'maintenance_date' => 'required|date',
+            'vendor_id' => 'nullable|exists:vendors,id',
+            'remark' => 'nullable|string|max:5000',
+            'status' => 'required|in:scheduled,in_progress,completed,cancelled',
+        ]);
+
+        $maintenance = $containerAsset->maintenances()->create($data);
+
+        $this->containerAssetService->log(
+            $containerAsset,
+            'Maintenance '.$data['maintenance_type'].' dicatat.',
+            'maintenance_recorded',
+            $request->user()?->id,
+            ['maintenance_id' => $maintenance->id],
+        );
+
+        return response()->json([
+            'message' => 'Maintenance berhasil dicatat.',
+            'data' => $maintenance->load('vendor:id,name'),
+        ], 201);
+    }
+
+    public function updateMaintenance(Request $request, ContainerAsset $containerAsset, ContainerMaintenance $maintenance): JsonResponse
+    {
+        if ((int) $maintenance->container_asset_id !== (int) $containerAsset->id) {
+            return response()->json(['message' => 'Maintenance tidak ditemukan.'], 404);
+        }
+
+        $data = $request->validate([
+            'maintenance_type' => 'sometimes|in:repair,inspection,cleaning',
+            'maintenance_date' => 'sometimes|date',
+            'vendor_id' => 'nullable|exists:vendors,id',
+            'remark' => 'nullable|string|max:5000',
+            'status' => 'sometimes|in:scheduled,in_progress,completed,cancelled',
+        ]);
+
+        $maintenance->update($data);
+
+        $this->containerAssetService->log(
+            $containerAsset,
+            'Maintenance diperbarui.',
+            'maintenance_updated',
+            $request->user()?->id,
+            ['maintenance_id' => $maintenance->id],
+        );
+
+        return response()->json([
+            'message' => 'Maintenance diperbarui.',
+            'data' => $maintenance->fresh('vendor:id,name'),
+        ]);
     }
 
     private function transformListRow(ContainerAsset $asset): array
     {
-        $maxCbm = (float) ($asset->max_capacity_cbm ?? 0);
-        $usedCbm = 0.0;
-        $active = $asset->activeShipmentContainer();
-        if ($active) {
-            $usedCbm = (float) $active->items()->sum('cbm');
-        }
-        $utilizationPct = $maxCbm > 0 ? round(($usedCbm / $maxCbm) * 100, 1) : 0.0;
-
         return [
             'id' => $asset->id,
             'container_number' => $asset->container_number,
@@ -191,53 +264,11 @@ class AdminContainerController extends Controller
             'vendor_id' => $asset->vendor_id,
             'current_yard' => $asset->currentYard?->name,
             'current_yard_id' => $asset->current_yard_id,
-            'utilization_pct' => $utilizationPct,
+            'utilization_pct' => $this->containerAssetService->listUtilizationPct($asset),
             'status' => $asset->status,
             'manufacture_year' => $asset->manufacture_year,
             'remark' => $asset->remark,
             'created_at' => $asset->created_at?->toIso8601String(),
-        ];
-    }
-
-    private function buildUtilization(ContainerAsset $asset, $activeContainer, $activeShipment): array
-    {
-        if (! $activeContainer || ! $activeShipment) {
-            return [
-                'mode' => 'available',
-                'used_cbm' => 0,
-                'remaining_cbm' => (float) ($asset->max_capacity_cbm ?? 0),
-                'used_payload_kg' => 0,
-                'remaining_payload_kg' => (float) ($asset->max_payload_kg ?? 0),
-                'remaining_pct' => 100,
-            ];
-        }
-
-        $serviceCode = strtolower((string) ($activeShipment->serviceType?->code ?? ''));
-        $isFcl = str_contains($serviceCode, 'fcl');
-
-        if ($isFcl) {
-            return [
-                'mode' => 'fcl',
-                'shipment_number' => $activeShipment->shipment_number,
-                'shipment_id' => $activeShipment->id,
-                'dedicated_message' => 'Dedicated for Shipment '.$activeShipment->shipment_number,
-            ];
-        }
-
-        $usedCbm = (float) $activeContainer->items()->sum('cbm');
-        $usedPayload = (float) $activeContainer->items()->sum('gross_weight');
-        $maxCbm = (float) ($asset->max_capacity_cbm ?? 0);
-        $maxPayload = (float) ($asset->max_payload_kg ?? 0);
-
-        return [
-            'mode' => 'lcl',
-            'shipment_number' => $activeShipment->shipment_number,
-            'shipment_id' => $activeShipment->id,
-            'used_cbm' => $usedCbm,
-            'remaining_cbm' => max(0, $maxCbm - $usedCbm),
-            'used_payload_kg' => $usedPayload,
-            'remaining_payload_kg' => max(0, $maxPayload - $usedPayload),
-            'remaining_pct' => $maxCbm > 0 ? round((max(0, $maxCbm - $usedCbm) / $maxCbm) * 100, 1) : 100,
         ];
     }
 }

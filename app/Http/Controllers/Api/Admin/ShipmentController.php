@@ -9,6 +9,7 @@ use App\Models\Invoice;
 use App\Models\Rack;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
+use App\Services\ContainerAssetService;
 use App\Services\ShipmentViewService;
 use App\Services\VendorJobOrderService;
 use App\Support\SystemConfig;
@@ -22,6 +23,7 @@ class ShipmentController extends Controller
     public function __construct(
         private readonly ShipmentViewService $shipmentView,
         private readonly VendorJobOrderService $vendorJobOrderService,
+        private readonly ContainerAssetService $containerAssetService,
     ) {}
 
     public function stats(): JsonResponse
@@ -566,7 +568,7 @@ class ShipmentController extends Controller
             ]);
 
             if ($asset) {
-                $asset->update(['status' => 'reserved']);
+                $this->containerAssetService->onAssigned($asset, $shipment, $request->user()?->id);
             }
         }
 
@@ -601,6 +603,16 @@ class ShipmentController extends Controller
                 'remark' => $data['remark'] ?? null,
             ]
         );
+
+        if ($asset->wasRecentlyCreated) {
+            $this->containerAssetService->log(
+                $asset,
+                'Vendor container '.$asset->container_number.' terdaftar.',
+                'created',
+                $request->user()?->id,
+            );
+            $this->containerAssetService->onRegistered($asset->load('currentYard'), $request->user()?->id);
+        }
 
         return response()->json([
             'message' => 'Vendor container terdaftar.',
@@ -649,10 +661,14 @@ class ShipmentController extends Controller
     public function destroyContainer(Container $container): JsonResponse
     {
         $assetId = $container->container_asset_id;
+        $shipment = $container->shipment;
         $container->delete();
 
         if ($assetId) {
-            ContainerAsset::where('id', $assetId)->where('status', 'reserved')->update(['status' => 'available']);
+            $asset = ContainerAsset::find($assetId);
+            if ($asset) {
+                $this->containerAssetService->onReleased($asset, $shipment);
+            }
         }
 
         return response()->json(['message' => 'Container dihapus.']);

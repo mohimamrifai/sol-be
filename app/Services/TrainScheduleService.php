@@ -12,6 +12,10 @@ use Illuminate\Support\Facades\DB;
 
 class TrainScheduleService
 {
+    public function __construct(
+        private readonly ContainerAssetService $containerAssetService,
+    ) {}
+
     public function applyStatusTransition(TrainSchedule $schedule, TrainScheduleStatus $newStatus, ?TrainScheduleStatus $previousStatus = null): void
     {
         if ($newStatus === TrainScheduleStatus::Departed) {
@@ -35,6 +39,15 @@ class TrainScheduleService
             }
 
             $this->updateLinkedContainerAssets($shipments, 'in_transit');
+
+            foreach ($shipments as $shipment) {
+                $shipment->loadMissing(['containers.containerAsset']);
+                foreach ($shipment->containers as $container) {
+                    if ($container->containerAsset) {
+                        $this->containerAssetService->onTrainDeparted($container->containerAsset, $shipment);
+                    }
+                }
+            }
         });
     }
 

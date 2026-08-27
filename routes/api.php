@@ -342,6 +342,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('containers', [AdminContainerController::class, 'store']);
         Route::get('containers/{containerAsset}', [AdminContainerController::class, 'show']);
         Route::put('containers/{containerAsset}', [AdminContainerController::class, 'update']);
+        Route::post('containers/{containerAsset}/maintenances', [AdminContainerController::class, 'storeMaintenance']);
+        Route::put('containers/{containerAsset}/maintenances/{maintenance}', [AdminContainerController::class, 'updateMaintenance']);
         Route::get('container-movements', [AdminContainerMovementController::class, 'index']);
 
         // Operations (FSD Phase 5)

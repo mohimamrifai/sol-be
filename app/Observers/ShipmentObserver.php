@@ -4,11 +4,15 @@ namespace App\Observers;
 
 use App\Models\AdditionalCharge;
 use App\Models\Shipment;
+use App\Services\ContainerAssetService;
 use App\Services\OperationTaskService;
 
 class ShipmentObserver
 {
-    public function __construct(private OperationTaskService $operationTaskService) {}
+    public function __construct(
+        private OperationTaskService $operationTaskService,
+        private ContainerAssetService $containerAssetService,
+    ) {}
     public function saving(Shipment $shipment): void
     {
         // Rule: Residual always leads to DG
@@ -25,6 +29,14 @@ class ShipmentObserver
             'shipment_coverage', 'pickup_vendor_id', 'delivery_vendor_id', 'pickup_scheduled_at',
         ])) {
             $this->operationTaskService->ensureTasksForShipment($shipment);
+        }
+
+        if ($shipment->wasChanged('status')) {
+            if (in_array($shipment->status, ['completed', 'cancelled'], true)) {
+                $this->containerAssetService->onShipmentTerminal($shipment);
+            } else {
+                $this->containerAssetService->syncShipmentContainerStatuses($shipment);
+            }
         }
     }
 
