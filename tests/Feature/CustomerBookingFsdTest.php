@@ -191,6 +191,15 @@ class CustomerBookingFsdTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_suspended_customer_cannot_create_new_booking(): void
+    {
+        $this->company->update(['status' => 'suspended']);
+        Sanctum::actingAs($this->admin);
+
+        $this->postJson('/api/customer/bookings', $this->basePayload(isDraft: true))
+            ->assertForbidden();
+    }
+
     public function test_viewer_sees_read_only_actions_on_draft_detail(): void
     {
         $booking = $this->createBooking($this->company, 'draft');

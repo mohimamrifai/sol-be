@@ -75,7 +75,7 @@ class CustomerLocationController extends Controller
         $data['status'] = $data['status'] ?? LocationStatus::Active->value;
         $data['country'] = $data['country'] ?? 'Indonesia';
         $data['company_id'] = $company->id;
-        $data['code'] = $this->locationCode->next($company->id);
+        $data['code'] = $this->locationCode->next($company->id, $data['name'], $data['type']);
 
         $location = CustomerLocation::create($data);
 
@@ -112,6 +112,21 @@ class CustomerLocationController extends Controller
             } elseif ($location->isOnlyHeadOffice()) {
                 return response()->json([
                     'message' => 'Tidak dapat mengubah tipe dari satu-satunya Head Office.',
+                ], 422);
+            }
+        }
+
+        if (($data['status'] ?? null) === LocationStatus::Inactive->value
+            && $location->isHeadOffice()
+            && $location->status === LocationStatus::Active
+        ) {
+            $activeHeadOffices = CustomerLocation::where('company_id', $company->id)
+                ->where('type', LocationType::HeadOffice)
+                ->where('status', LocationStatus::Active)
+                ->count();
+            if ($activeHeadOffices <= 1) {
+                return response()->json([
+                    'message' => 'Tidak dapat menonaktifkan satu-satunya Head Office aktif.',
                 ], 422);
             }
         }

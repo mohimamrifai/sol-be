@@ -352,7 +352,7 @@ class CustomerDemoSeeder extends Seeder
         $statusForIndex = [LocationStatus::Active, LocationStatus::Active, LocationStatus::Active, LocationStatus::Inactive];
         foreach ($data as $idx => $row) {
             $row['company_id'] = $company->id;
-            $row['code'] = $service->next($company->id);
+            $row['code'] = $service->next($company->id, $row['name'], $row['type']->value);
             $row['status'] = $statusForIndex[$idx] ?? LocationStatus::Active;
             $location = CustomerLocation::create($row);
 

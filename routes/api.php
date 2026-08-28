@@ -115,6 +115,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Customer Management
         Route::get('companies/stats', [CompanyController::class, 'stats']);
+        Route::get('customer-postal-codes', [CompanyController::class, 'postalCodes']);
         Route::apiResource('companies', CompanyController::class);
         Route::post('companies/{company}/approve', [CompanyController::class, 'approve']);
         Route::post('companies/{company}/reject', [CompanyController::class, 'reject']);

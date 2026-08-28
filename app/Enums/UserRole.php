@@ -81,7 +81,8 @@ enum UserRole: string
                 'manage_roles', 'view_settings', 'manage_settings', 'manage_numbering', 'manage_system_config',
             ],
             self::Operations => [
-                'view_companies', 'view_bookings', 'approve_bookings', 'reject_bookings',
+                'view_companies', 'create_companies', 'edit_companies',
+                'view_bookings', 'approve_bookings', 'reject_bookings',
                 'view_shipments', 'create_shipments', 'edit_shipments', 'update_tracking',
                 'view_invoices', 'view_dashboard',
                 'view_containers', 'edit_containers', 'manage_containers',
@@ -91,7 +92,7 @@ enum UserRole: string
                 'manage_master_data',
             ],
             self::Finance => [
-                'view_companies', 'view_bookings', 'view_shipments',
+                'view_companies', 'edit_companies', 'view_bookings', 'view_shipments',
                 'view_invoices', 'create_invoices', 'edit_invoices',
                 'view_payments', 'manage_payments',
                 'view_dashboard',

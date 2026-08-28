@@ -148,6 +148,12 @@ class BookingController extends Controller
             return response()->json(['message' => 'Akses ditolak. Anda tidak memiliki permission untuk membuat booking.'], 403);
         }
 
+        if (! $user->company || $user->company->status !== 'active') {
+            return response()->json([
+                'message' => 'Customer tidak aktif. Booking baru hanya dapat dibuat oleh customer berstatus Active.',
+            ], 403);
+        }
+
         if ($user->company && $user->company->hasOverdueInvoices()) {
             return response()->json([
                 'message' => 'Perusahaan Anda memiliki invoice jatuh tempo. Silakan lunasi terlebih dahulu.',

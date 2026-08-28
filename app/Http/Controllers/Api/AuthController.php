@@ -35,6 +35,15 @@ class AuthController extends Controller
             ]);
         }
 
+        if ($user->user_type === 'customer'
+            && $user->company
+            && ! in_array($user->company->status, ['active', 'suspended'], true)
+        ) {
+            throw ValidationException::withMessages([
+                'email' => ['Perusahaan Anda belum aktif atau tidak dapat digunakan.'],
+            ]);
+        }
+
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([

@@ -98,7 +98,10 @@ class Company extends Model
         static::updating(function (Company $company) {
             if ($company->isDirty('company_code')) {
                 $originalStatus = $company->getOriginal('status');
-                if ($originalStatus === 'active' || $company->status === 'active') {
+                if ($originalStatus === 'active'
+                    || $company->status === 'active'
+                    || $company->getOriginal('approved_at') !== null
+                ) {
                     $company->company_code = $company->getOriginal('company_code');
                 }
             }

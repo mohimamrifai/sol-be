@@ -13,7 +13,12 @@ class StoreLocationRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null && $this->user()->can('view_locations');
+        $user = $this->user();
+
+        return $user !== null
+            && ($user->can('manage_locations')
+                || ($user->user_type === 'customer' && $user->can('view_locations'))
+                || ($user->user_type === 'internal' && $user->can('edit_companies')));
     }
 
     public function rules(): array
@@ -27,7 +32,7 @@ class StoreLocationRequest extends FormRequest
             'province' => 'required|string|max:255',
             'city' => 'required|string|max:255',
             'district' => 'nullable|string|max:120',
-            'postal_code' => 'nullable|string|max:20',
+            'postal_code' => 'required|string|max:10',
             'address' => 'required|string',
             'pic_name' => 'required|string|max:255',
             'pic_email' => 'required|email|max:255',

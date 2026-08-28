@@ -13,7 +13,12 @@ class UpdateLocationRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null && $this->user()->can('view_locations');
+        $user = $this->user();
+
+        return $user !== null
+            && ($user->can('manage_locations')
+                || ($user->user_type === 'customer' && $user->can('view_locations'))
+                || ($user->user_type === 'internal' && $user->can('edit_companies')));
     }
 
     public function rules(): array

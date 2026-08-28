@@ -90,7 +90,7 @@ class CustomerRegistrationService
     {
         return CustomerLocation::create([
             'company_id' => $company->id,
-            'code' => $this->locationCode->next($company->id),
+            'code' => $this->locationCode->next($company->id, $company->name, LocationType::HeadOffice->value),
             'name' => $company->name,
             'type' => LocationType::HeadOffice->value,
             'status' => LocationStatus::Active->value,

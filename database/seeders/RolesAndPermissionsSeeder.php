@@ -86,7 +86,8 @@ class RolesAndPermissionsSeeder extends Seeder
 
         $operations = Role::firstOrCreate(['name' => 'operations', 'guard_name' => 'web']);
         $operations->givePermissionTo([
-            'view_companies', 'view_bookings', 'approve_bookings', 'reject_bookings',
+            'view_companies', 'create_companies', 'edit_companies',
+            'view_bookings', 'approve_bookings', 'reject_bookings',
             'view_shipments', 'create_shipments', 'edit_shipments', 'update_tracking',
             'view_invoices', 'view_dashboard',
             'view_containers', 'edit_containers', 'manage_containers',
@@ -98,7 +99,7 @@ class RolesAndPermissionsSeeder extends Seeder
 
         $finance = Role::firstOrCreate(['name' => 'finance', 'guard_name' => 'web']);
         $finance->givePermissionTo([
-            'view_companies', 'view_bookings', 'view_shipments',
+            'view_companies', 'edit_companies', 'view_bookings', 'view_shipments',
             'view_invoices', 'create_invoices', 'edit_invoices',
             'view_payments', 'manage_payments',
             'view_dashboard',

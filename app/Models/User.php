@@ -103,6 +103,10 @@ class User extends Authenticatable
             return true;
         }
 
+        if ($this->can($permission)) {
+            return true;
+        }
+
         if (str_starts_with($permission, 'view_')) {
             $suffix = substr($permission, 5);
             foreach (['manage_', 'edit_', 'create_'] as $prefix) {

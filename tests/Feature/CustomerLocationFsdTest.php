@@ -53,7 +53,7 @@ class CustomerLocationFsdTest extends TestCase
 
         $this->headOffice = CustomerLocation::create([
             'company_id' => $this->company->id,
-            'code' => 'LF0-0001',
+            'code' => 'HO',
             'name' => 'Head Office Jakarta',
             'type' => 'head_office',
             'phone' => '021-1234567',
@@ -74,7 +74,7 @@ class CustomerLocationFsdTest extends TestCase
     {
         CustomerLocation::create([
             'company_id' => $this->company->id,
-            'code' => 'LF0-0002',
+            'code' => 'SWH',
             'name' => 'Surabaya Warehouse',
             'type' => 'warehouse',
             'status' => 'active',
@@ -108,7 +108,8 @@ class CustomerLocationFsdTest extends TestCase
         $code = $response->json('data.code');
 
         $this->assertNotEmpty($code);
-        $this->assertStringStartsWith('LF0-', $code);
+        $this->assertLessThanOrEqual(3, strlen($code));
+        $this->assertDoesNotMatchRegularExpression('/-/', $code);
 
         $this->assertTrue(
             CompanyActivity::query()
@@ -125,7 +126,7 @@ class CustomerLocationFsdTest extends TestCase
 
         $location = CustomerLocation::create([
             'company_id' => $this->company->id,
-            'code' => 'LF0-0003',
+            'code' => 'BRA',
             'name' => 'Branch Bandung',
             'type' => 'branch_office',
             'status' => 'active',
@@ -186,7 +187,7 @@ class CustomerLocationFsdTest extends TestCase
 
         $foreign = CustomerLocation::create([
             'company_id' => $otherCompany->id,
-            'code' => 'OL0-0001',
+            'code' => 'OLH',
             'name' => 'Foreign HO',
             'type' => 'head_office',
             'status' => 'active',
@@ -246,7 +247,7 @@ class CustomerLocationFsdTest extends TestCase
     {
         CustomerLocation::create([
             'company_id' => $this->company->id,
-            'code' => 'LF0-0004',
+            'code' => 'INW',
             'name' => 'Inactive Warehouse',
             'type' => 'warehouse',
             'status' => 'inactive',
@@ -265,7 +266,7 @@ class CustomerLocationFsdTest extends TestCase
         $this->assertCount(1, $inactive);
         $this->assertSame('Inactive Warehouse', $inactive[0]['name']);
 
-        $search = $this->getJson('/api/customer/locations?search=LF0-0001')->assertOk()->json('data');
+        $search = $this->getJson('/api/customer/locations?search=Jakarta')->assertOk()->json('data');
         $this->assertCount(1, $search);
         $this->assertSame('Head Office Jakarta', $search[0]['name']);
     }
