@@ -8,15 +8,19 @@ use App\Models\ContainerAsset;
 use App\Models\Invoice;
 use App\Models\Rack;
 use App\Models\Shipment;
+use App\Models\ShipmentDocument;
 use App\Models\ShipmentItem;
 use App\Services\ContainerAssetService;
+use App\Services\ShipmentActivityLogger;
 use App\Services\ShipmentViewService;
 use App\Services\VendorJobOrderService;
 use App\Support\SystemConfig;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class ShipmentController extends Controller
 {
@@ -24,14 +28,29 @@ class ShipmentController extends Controller
         private readonly ShipmentViewService $shipmentView,
         private readonly VendorJobOrderService $vendorJobOrderService,
         private readonly ContainerAssetService $containerAssetService,
+        private readonly ShipmentActivityLogger $activityLogger,
     ) {}
+
+    public function options(): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'vehicle_types' => config('shipment.vehicle_types', []),
+                'tracking_statuses' => config('shipment.tracking_statuses', []),
+            ],
+        ]);
+    }
 
     public function stats(): JsonResponse
     {
         $all = Shipment::query()->select('status')->get();
         $planning = $all->whereIn('status', ['created', 'booking_created', 'survey_completed'])->count();
-        $ready = $all->whereIn('status', ['cargo_received', 'stuffing_container', 'container_sealed', 'ready_for_pickup'])->count();
-        $inTransit = $all->whereIn('status', ['train_departed', 'departed', 'train_arrived', 'arrived', 'container_unloading', 'unloading'])->count();
+        $ready = $all->where('status', 'ready_for_pickup')->count();
+        $inTransit = $all->whereIn('status', [
+            'cargo_received', 'stuffing_container', 'container_sealed',
+            'train_departed', 'departed', 'train_arrived', 'arrived',
+            'container_unloading', 'unloading', 'proof_of_delivery',
+        ])->count();
         $completed = $all->where('status', 'completed')->count();
         $cancelled = $all->where('status', 'cancelled')->count();
 
@@ -98,8 +117,12 @@ class ShipmentController extends Controller
     {
         $map = [
             'planning' => ['created', 'booking_created', 'survey_completed'],
-            'ready_for_departure' => ['cargo_received', 'stuffing_container', 'container_sealed', 'ready_for_pickup'],
-            'in_transit' => ['train_departed', 'departed', 'train_arrived', 'arrived', 'container_unloading', 'unloading'],
+            'ready_for_departure' => ['ready_for_pickup'],
+            'in_transit' => [
+                'cargo_received', 'stuffing_container', 'container_sealed',
+                'train_departed', 'departed', 'train_arrived', 'arrived',
+                'container_unloading', 'unloading', 'proof_of_delivery',
+            ],
             'completed' => ['completed'],
             'cancelled' => ['cancelled'],
         ];
@@ -107,13 +130,13 @@ class ShipmentController extends Controller
         $query->whereIn('status', $statuses);
     }
 
-    public function show(Shipment $shipment): JsonResponse
+    public function show(Request $request, Shipment $shipment): JsonResponse
     {
         $shipment->load([
             'booking.cargoCategory', 'booking.dgClass',
             'company', 'originLocation', 'destinationLocation',
             'transportMode', 'serviceType', 'createdByUser:id,name',
-            'internalPic:id,name', 'train:id,name,code',
+            'internalPic:id,name', 'train:id,name,code', 'trainSchedule:id,code,train_number,departure_at,eta_at',
             'originYard:id,name,code', 'destinationYard:id,name,code',
             'pickupVendor:id,name,code', 'deliveryVendor:id,name,code',
             'containers.containerType', 'containers.containerAsset.vendor', 'containers.containerAsset.currentYard',
@@ -124,14 +147,107 @@ class ShipmentController extends Controller
 
         $payload = $shipment->toArray();
         $payload['cargo'] = $this->shipmentView->cargo($shipment);
-        $payload['documents'] = $this->shipmentView->documents($shipment);
+        $payload['documents'] = $this->shipmentView->adminDocuments($shipment);
+        $payload['tracking_timeline'] = $this->shipmentView->trackingTimeline($shipment);
         $payload['activity_log'] = $this->shipmentView->activityLog($shipment);
+        $payload['capabilities'] = $this->buildCapabilities($request, $shipment);
 
         return response()->json(['data' => $payload]);
     }
 
+    /**
+     * @return array<string, bool>
+     */
+    private function buildCapabilities(Request $request, Shipment $shipment): array
+    {
+        $user = $request->user();
+        $canEdit = $user && ($user->can('edit_shipments') || $user->hasRole('super_admin'));
+        $isPlanning = $shipment->isPlanning();
+        $isTerminal = in_array($shipment->status, ['completed', 'cancelled'], true);
+
+        return [
+            'can_edit_planning' => $isPlanning && $canEdit,
+            'can_edit_shipment_info' => ! $isTerminal && ($isPlanning || $canEdit),
+            'can_modify_container' => ! $isTerminal && ($isPlanning || $canEdit),
+            'can_modify_transport' => ! $isTerminal && ($isPlanning || $canEdit),
+            'can_upload_documents' => ! $isTerminal && $canEdit,
+        ];
+    }
+
+    public function storeDocument(Request $request, Shipment $shipment): JsonResponse
+    {
+        if ($deny = $this->ensureShipmentWritable($request, $shipment)) {
+            return $deny;
+        }
+
+        $user = $request->user();
+        if (! $user || (! $user->can('edit_shipments') && ! $user->hasRole('super_admin'))) {
+            return response()->json(['message' => 'Tidak memiliki otorisasi mengunggah dokumen.'], 403);
+        }
+
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png,xlsx,xls,doc,docx', 'max:10240'],
+        ]);
+
+        $file = $request->file('file');
+        $path = $file->store("shipment-documents/{$shipment->id}/supporting", 'public');
+        $document = $shipment->documents()->create([
+            'kind' => 'supporting',
+            'file_path' => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
+            'size' => $file->getSize() ?: 0,
+            'uploaded_by' => $request->user()?->id,
+        ]);
+
+        $this->activityLogger->log(
+            $shipment,
+            'document_uploaded',
+            'Dokumen pendukung diunggah: '.$document->original_name,
+            $request->user(),
+        );
+
+        return response()->json(['message' => 'Dokumen berhasil diunggah.', 'data' => $document], 201);
+    }
+
+    public function downloadDocument(Request $request, Shipment $shipment, ShipmentDocument $document): SymfonyResponse
+    {
+        abort_unless($document->shipment_id === $shipment->id, 404);
+        abort_unless(Storage::disk('public')->exists($document->file_path), 404, 'Dokumen tidak ditemukan.');
+
+        $content = Storage::disk('public')->get($document->file_path);
+        $inline = $request->boolean('view') || $request->boolean('inline');
+
+        return response($content, 200, [
+            'Content-Type' => $document->mime_type ?: 'application/octet-stream',
+            'Content-Length' => (string) strlen($content),
+            'Content-Disposition' => ($inline ? 'inline' : 'attachment')
+                .'; filename="'.addslashes($document->original_name).'"',
+        ]);
+    }
+
     public function update(Request $request, Shipment $shipment): JsonResponse
     {
+        if ($deny = $this->ensureShipmentWritable($request, $shipment)) {
+            return $deny;
+        }
+
+        if ($deny = $this->ensureCanModifyPlanning($request, $shipment)) {
+            return $deny;
+        }
+
+        $previousDeparture = $shipment->estimated_departure?->toDateTimeString();
+        $previousArrival = $shipment->estimated_arrival?->toDateTimeString();
+        $previousTransport = $shipment->only([
+            'pickup_vendor_id', 'pickup_vehicle_type', 'pickup_vehicle_plate', 'pickup_driver_name',
+            'pickup_driver_mobile', 'pickup_vendor_pic', 'pickup_scheduled_at', 'pickup_remark',
+            'delivery_vendor_id', 'delivery_vehicle_type', 'delivery_vehicle_plate', 'delivery_driver_name',
+            'delivery_driver_mobile', 'delivery_vendor_pic', 'delivery_scheduled_at', 'delivery_remark',
+        ]);
+        $previousPlanning = $shipment->only([
+            'internal_pic_id', 'train_id', 'train_schedule_id', 'origin_yard_id', 'destination_yard_id', 'planning_notes',
+        ]);
+
         $data = $request->validate([
             'cargo_category_id' => 'sometimes|exists:cargo_categories,id',
             'is_dangerous_goods' => 'sometimes|boolean',
@@ -146,6 +262,7 @@ class ShipmentController extends Controller
             'notes' => 'nullable|string',
             'internal_pic_id' => 'nullable|exists:users,id',
             'train_id' => 'nullable|exists:trains,id',
+            'train_schedule_id' => 'nullable|exists:train_schedules,id',
             'origin_yard_id' => 'nullable|exists:locations,id',
             'destination_yard_id' => 'nullable|exists:locations,id',
             'planning_notes' => 'nullable|string|max:5000',
@@ -169,14 +286,99 @@ class ShipmentController extends Controller
         ]);
 
         $shipment->update($data);
-        $this->vendorJobOrderService->syncFromShipment($shipment->fresh(), $request->user()?->id);
+        $shipment->refresh();
+        $this->vendorJobOrderService->syncFromShipment($shipment, $request->user()?->id);
+
+        if (array_key_exists('estimated_arrival', $data)) {
+            $newArrival = $shipment->estimated_arrival?->toDateTimeString();
+            if ($previousArrival !== $newArrival) {
+                $this->activityLogger->log(
+                    $shipment,
+                    'eta_changed',
+                    'ETA berubah dari `'.$this->formatActivityDate($previousArrival).'` menjadi `'.$this->formatActivityDate($newArrival).'`.',
+                    $request->user(),
+                );
+            }
+        }
+
+        if (array_key_exists('estimated_departure', $data)) {
+            $newDeparture = $shipment->estimated_departure?->toDateTimeString();
+            if ($previousDeparture !== $newDeparture) {
+                $this->activityLogger->log(
+                    $shipment,
+                    'planned_departure_changed',
+                    'Planned Departure berubah dari `'.$this->formatActivityDate($previousDeparture).'` menjadi `'.$this->formatActivityDate($newDeparture).'`.',
+                    $request->user(),
+                );
+            }
+        }
+
+        $transportKeys = array_keys($previousTransport);
+        if (array_intersect(array_keys($data), $transportKeys) !== []) {
+            $changed = collect($transportKeys)->first(fn ($key) => array_key_exists($key, $data)
+                && (string) ($previousTransport[$key] ?? '') !== (string) ($shipment->{$key} ?? ''));
+            if ($changed) {
+                $this->activityLogger->log(
+                    $shipment,
+                    'transport_updated',
+                    'Transport assignment diperbarui oleh '.$request->user()?->name.'.',
+                    $request->user(),
+                );
+            }
+        }
+
+        $planningKeys = array_keys($previousPlanning);
+        if (array_intersect(array_keys($data), $planningKeys) !== []) {
+            $changed = collect($planningKeys)->first(fn ($key) => array_key_exists($key, $data)
+                && (string) ($previousPlanning[$key] ?? '') !== (string) ($shipment->{$key} ?? ''));
+            if ($changed) {
+                $this->activityLogger->log(
+                    $shipment,
+                    'planning_updated',
+                    'Planning diperbarui oleh '.$request->user()?->name.'.',
+                    $request->user(),
+                );
+            }
+        }
 
         return response()->json([
             'message' => 'Shipment diperbarui.',
             'data' => $shipment->fresh([
-                'internalPic:id,name', 'train:id,name,code',
+                'internalPic:id,name', 'train:id,name,code', 'trainSchedule:id,code,train_number,departure_at,eta_at', 'trainSchedule:id,code,train_number,departure_at,eta_at',
                 'originYard:id,name,code', 'destinationYard:id,name,code',
             ]),
+        ]);
+    }
+
+    /**
+     * Generate Consignment Note (FSD §3.5) — idempotent jika CN sudah ada.
+     */
+    public function generateConsignmentNote(Request $request, Shipment $shipment): JsonResponse
+    {
+        if (! in_array($shipment->status, Shipment::planningStatuses(), true)) {
+            return response()->json(['message' => 'Consignment Note hanya dapat dibuat saat status Planning.'], 422);
+        }
+
+        if ($shipment->waybill_number) {
+            return response()->json([
+                'message' => 'Consignment Note sudah ada.',
+                'data' => ['waybill_number' => $shipment->waybill_number],
+            ]);
+        }
+
+        $waybill = $shipment->generateWaybillNumber();
+        $shipment->update(['waybill_number' => $waybill]);
+
+        $this->activityLogger->log(
+            $shipment,
+            'consignment_note_generated',
+            'Consignment Note dibuat: '.$waybill.'.',
+            $request->user(),
+        );
+
+        return response()->json([
+            'message' => 'Consignment Note berhasil dibuat.',
+            'data' => ['waybill_number' => $waybill],
         ]);
     }
 
@@ -195,18 +397,46 @@ class ShipmentController extends Controller
             return response()->json(['message' => 'Shipment sudah siap berangkat.'], 422);
         }
 
+        $planningStatuses = ['created', 'booking_created', 'survey_completed'];
+        if (! in_array($shipment->status, $planningStatuses, true)) {
+            return response()->json(['message' => 'Hanya shipment berstatus Planning yang dapat dijadikan Ready for Departure.'], 422);
+        }
+
+        $shipment->loadMissing(['booking.containers', 'serviceType', 'containers']);
+        $serviceCode = strtoupper((string) ($shipment->serviceType?->code ?? ''));
+        $isLcl = $serviceCode === 'LCL';
+
         $errors = [];
+        if (! $shipment->internal_pic_id) {
+            $errors['internal_pic_id'] = 'Internal PIC wajib diisi.';
+        }
+        if (! $shipment->origin_yard_id) {
+            $errors['origin_yard_id'] = 'Origin Yard wajib diisi.';
+        }
+        if (! $shipment->destination_yard_id) {
+            $errors['destination_yard_id'] = 'Destination Yard wajib diisi.';
+        }
+        if (! $shipment->train_schedule_id && ! $shipment->train_id) {
+            $errors['train_schedule_id'] = 'Train Schedule wajib dipilih.';
+        }
         if (! $shipment->estimated_departure) {
-            $errors['estimated_departure'] = 'Tanggal keberangkatan estimasi wajib diisi.';
+            $errors['estimated_departure'] = 'Planned Departure wajib diisi.';
         }
-        if (! $shipment->train_id) {
-            $errors['train_id'] = 'Kereta wajib dipilih.';
-        }
-        if ($shipment->containers()->count() === 0 && $shipment->items()->count() === 0) {
-            $errors['cargo'] = 'Minimal satu container atau item cargo harus ada.';
+        if (! $shipment->estimated_arrival) {
+            $errors['estimated_arrival'] = 'Estimated Arrival wajib diisi.';
         }
         if (! $shipment->waybill_number) {
-            $errors['waybill_number'] = 'Nomor waybill wajib ada sebelum siap berangkat.';
+            $errors['waybill_number'] = 'Consignment Note wajib ada sebelum siap berangkat.';
+        }
+
+        $containers = $shipment->containers;
+        $assigned = $containers->filter(fn ($c) => ! empty($c->container_number));
+        if ($assigned->isEmpty()) {
+            $errors['containers'] = 'Container belum dialokasikan.';
+        } elseif ($isLcl && $assigned->count() !== 1) {
+            $errors['containers'] = 'Shipment LCL hanya boleh dialokasikan ke satu container.';
+        } elseif (! $isLcl && $assigned->count() < $containers->count()) {
+            $errors['containers'] = 'Semua slot container FCL harus dialokasikan.';
         }
 
         $coverage = (string) ($shipment->shipment_coverage ?? '');
@@ -229,6 +459,13 @@ class ShipmentController extends Controller
             'updated_by' => $request->user()->id,
         ]);
 
+        $this->activityLogger->log(
+            $shipment,
+            'status_ready_for_departure',
+            'Status diubah menjadi Ready for Departure.',
+            $request->user(),
+        );
+
         return response()->json([
             'message' => 'Shipment ditandai siap berangkat.',
             'data' => $shipment->fresh(['trackings']),
@@ -244,11 +481,8 @@ class ShipmentController extends Controller
             return response()->json(['message' => 'Shipment tidak dapat dibatalkan.'], 422);
         }
 
-        $preReadyStatuses = [
-            'created', 'booking_created', 'survey_completed',
-            'cargo_received', 'stuffing_container', 'container_sealed',
-        ];
-        if (! in_array($shipment->status, $preReadyStatuses, true)) {
+        $planningStatuses = ['created', 'booking_created', 'survey_completed'];
+        if (! in_array($shipment->status, $planningStatuses, true)) {
             return response()->json(['message' => 'Shipment hanya dapat dibatalkan sebelum status Ready for Departure.'], 422);
         }
 
@@ -266,6 +500,13 @@ class ShipmentController extends Controller
             'tracked_at' => now(),
             'updated_by' => $request->user()->id,
         ]);
+
+        $this->activityLogger->log(
+            $shipment,
+            'status_cancelled',
+            'Shipment dibatalkan: '.$data['reason'],
+            $request->user(),
+        );
 
         return response()->json([
             'message' => 'Shipment berhasil dibatalkan.',
@@ -294,6 +535,13 @@ class ShipmentController extends Controller
             'tracked_at' => $data['tracked_at'] ?? now(),
             'updated_by' => $request->user()->id,
         ]);
+
+        $this->activityLogger->log(
+            $shipment,
+            'tracking_updated',
+            'Tracking diperbarui: '.$this->shipmentView->trackingTimelineTitle((string) $data['status']),
+            $request->user(),
+        );
 
         // Upload foto
         if ($request->hasFile('photos')) {
@@ -504,6 +752,8 @@ class ShipmentController extends Controller
                 'remaining_cbm' => $remainingCbm !== null ? round($remainingCbm, 3) : null,
                 'used_payload_kg' => round($usedPayload, 2),
                 'remaining_payload_kg' => $remainingPayload !== null ? round($remainingPayload, 2) : null,
+                'used_payload_ton' => round($usedPayload / 1000, 2),
+                'remaining_payload_ton' => $remainingPayload !== null ? round($remainingPayload / 1000, 2) : null,
                 'can_assign' => $canAssign,
             ];
         })->values();
@@ -516,6 +766,8 @@ class ShipmentController extends Controller
         if ((int) $container->shipment_id !== (int) $shipment->id) {
             return response()->json(['message' => 'Container tidak termasuk shipment ini.'], 422);
         }
+
+        $shipment->loadMissing('serviceType');
 
         if ($deny = $this->ensureCanModifyPlanning($request, $shipment)) {
             return $deny;
@@ -554,6 +806,18 @@ class ShipmentController extends Controller
                 if (! $asset) {
                     return response()->json(['message' => 'Container tidak tersedia.'], 422);
                 }
+
+                $serviceCode = strtoupper((string) ($shipment->serviceType?->code ?? ''));
+                if ($serviceCode !== 'LCL') {
+                    $inUse = Container::query()
+                        ->where('container_asset_id', $asset->id)
+                        ->where('shipment_id', '!=', $shipment->id)
+                        ->whereHas('shipment', fn ($q) => $q->whereNotIn('status', ['cancelled', 'completed']))
+                        ->exists();
+                    if ($inUse) {
+                        return response()->json(['message' => 'Container FCL sudah digunakan shipment lain.'], 422);
+                    }
+                }
             } elseif (empty($data['container_number'])) {
                 return response()->json(['message' => 'Pilih container atau isi nomor container.'], 422);
             }
@@ -572,6 +836,15 @@ class ShipmentController extends Controller
             }
         }
 
+        $containerNumber = (string) ($container->fresh()->container_number ?? '');
+        $this->activityLogger->log(
+            $shipment,
+            'container_assigned',
+            'Container '.$containerNumber.' dialokasikan.',
+            $request->user(),
+            ['container_id' => $container->id],
+        );
+
         return response()->json([
             'message' => 'Container berhasil dialokasikan.',
             'data' => $container->fresh(['containerType', 'containerAsset.vendor', 'containerAsset.currentYard']),
@@ -588,7 +861,7 @@ class ShipmentController extends Controller
             'vendor_id' => 'required|exists:vendors,id',
             'container_number' => 'required|string|max:255',
             'container_type_id' => 'required|exists:container_types,id',
-            'current_yard_id' => 'nullable|exists:locations,id',
+            'current_yard_id' => 'required|exists:locations,id',
             'remark' => 'nullable|string|max:2000',
         ]);
 
@@ -624,6 +897,12 @@ class ShipmentController extends Controller
     {
         if ($deny = $this->ensureCanModifyPlanning($request, $shipment)) {
             return $deny;
+        }
+
+        $shipment->loadMissing('serviceType');
+        $serviceCode = strtoupper((string) ($shipment->serviceType?->code ?? ''));
+        if ($serviceCode === 'LCL' && $shipment->containers()->count() >= 1) {
+            return response()->json(['message' => 'Shipment LCL hanya boleh memiliki satu container.'], 422);
         }
 
         $data = $request->validate([
@@ -674,23 +953,32 @@ class ShipmentController extends Controller
         return response()->json(['message' => 'Container dihapus.']);
     }
 
+    private function ensureShipmentWritable(Request $request, Shipment $shipment): ?JsonResponse
+    {
+        if (in_array($shipment->status, ['completed', 'cancelled'], true)) {
+            return response()->json(['message' => 'Shipment tidak dapat diubah.'], 422);
+        }
+
+        return null;
+    }
+
     private function ensureCanModifyPlanning(Request $request, Shipment $shipment): ?JsonResponse
     {
-        $postReadyStatuses = [
-            'ready_for_pickup', 'departed', 'train_departed', 'arrived', 'train_arrived',
-            'unloading', 'container_unloading', 'completed',
-        ];
-
-        if (! in_array($shipment->status, $postReadyStatuses, true)) {
+        if ($shipment->isPlanning()) {
             return null;
         }
 
-        if ($request->user()?->hasRole('super_admin')) {
+        if (! $shipment->isPostReady()) {
+            return null;
+        }
+
+        $user = $request->user();
+        if ($user?->hasRole('super_admin') || $user?->can('edit_shipments')) {
             return null;
         }
 
         return response()->json([
-            'message' => 'Perubahan setelah Ready for Departure memerlukan otorisasi super admin.',
+            'message' => 'Perubahan setelah Ready for Departure memerlukan otorisasi edit shipment.',
         ], 403);
     }
 
@@ -781,8 +1069,10 @@ class ShipmentController extends Controller
         return response()->json(['message' => 'Item dihapus.']);
     }
 
-    public function downloadConsignmentNotePdf(Shipment $shipment)
+    public function downloadConsignmentNotePdf(Request $request, Shipment $shipment)
     {
+        abort_unless($shipment->waybill_number, 404, 'Consignment Note belum tersedia.');
+
         $shipment->load([
             'originLocation', 'destinationLocation', 'serviceType', 'booking.cargoCategory',
             'items',
@@ -790,8 +1080,30 @@ class ShipmentController extends Controller
         ]);
 
         $pdf = Pdf::loadView('pdf.consignment-note', ['shipment' => $shipment]);
+        $filename = 'consignment-note-'.$shipment->waybill_number.'.pdf';
+        $inline = $request->boolean('view') || $request->boolean('inline');
 
-        return $pdf->download('consignment-note-'.$shipment->waybill_number.'.pdf');
+        if ($request->user() && ! $inline) {
+            $this->activityLogger->log(
+                $shipment,
+                'consignment_note_printed',
+                'Consignment Note dicetak.',
+                $request->user(),
+            );
+        }
+
+        return $inline
+            ? $pdf->stream($filename)
+            : $pdf->download($filename);
+    }
+
+    private function formatActivityDate(?string $value): string
+    {
+        if (! $value) {
+            return '—';
+        }
+
+        return \Carbon\Carbon::parse($value)->format('d M Y H:i');
     }
 
     public function downloadWaybillPdf(Shipment $shipment)

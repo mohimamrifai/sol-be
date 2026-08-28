@@ -35,6 +35,40 @@ class Shipment extends Model
 
     private const PLANNING_STATUSES = ['created', 'booking_created', 'survey_completed'];
 
+    public static function planningStatuses(): array
+    {
+        return self::PLANNING_STATUSES;
+    }
+
+    public function isPlanning(): bool
+    {
+        return in_array((string) $this->status, self::PLANNING_STATUSES, true);
+    }
+
+    public static function postReadyStatuses(): array
+    {
+        return [
+            'ready_for_pickup', 'cargo_received', 'stuffing_container', 'container_sealed',
+            'departed', 'train_departed', 'arrived', 'train_arrived',
+            'container_unloading', 'unloading', 'proof_of_delivery',
+        ];
+    }
+
+    public function isPostReady(): bool
+    {
+        return in_array((string) $this->status, self::postReadyStatuses(), true);
+    }
+
+    public function isOperationsEligible(): bool
+    {
+        return ! $this->isPlanning() && $this->status !== 'cancelled';
+    }
+
+    public function generateWaybillNumber(): string
+    {
+        return 'CN-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
+    }
+
     private const IN_PROGRESS_STATUSES = [
         'cargo_received', 'stuffing_container', 'container_sealed',
         'departed', 'train_departed', 'arrived', 'train_arrived',
@@ -60,20 +94,21 @@ class Shipment extends Model
         'delivery_vendor_id', 'delivery_vehicle_type', 'delivery_vehicle_plate',
         'delivery_driver_name', 'delivery_driver_mobile', 'delivery_vendor_pic', 'delivery_scheduled_at', 'delivery_remark',
         'rail_vendor_id',
-        'shipper_snapshot', 'consignee_snapshot',
+        'shipper_snapshot', 'consignee_snapshot', 'cargo_snapshot',
     ];
 
     protected function casts(): array
     {
         return [
-            'estimated_departure' => 'date',
-            'estimated_arrival' => 'date',
-            'actual_departure' => 'date',
-            'actual_arrival' => 'date',
+            'estimated_departure' => 'datetime',
+            'estimated_arrival' => 'datetime',
+            'actual_departure' => 'datetime',
+            'actual_arrival' => 'datetime',
             'is_dangerous_goods' => 'boolean',
             'temperature' => 'decimal:2',
             'shipper_snapshot' => 'array',
             'consignee_snapshot' => 'array',
+            'cargo_snapshot' => 'array',
             'accepted_at' => 'datetime',
             'completion_submitted_at' => 'datetime',
             'completion_verified_at' => 'datetime',
@@ -82,7 +117,7 @@ class Shipment extends Model
         ];
     }
 
-    protected $appends = ['display_number', 'high_level_status'];
+    protected $appends = ['display_number', 'high_level_status', 'fsd_status'];
 
     // ── Auto-generate shipment & waybill numbers ──
     protected static function booted(): void
@@ -93,9 +128,6 @@ class Shipment extends Model
             }
             if (empty($shipment->shipment_number)) {
                 $shipment->shipment_number = app(DocumentNumberService::class)->generate('SHP');
-            }
-            if (empty($shipment->waybill_number)) {
-                $shipment->waybill_number = 'CN-'.now()->format('Ymd').'-'.strtoupper(substr(uniqid(), -5));
             }
         });
     }
@@ -132,6 +164,36 @@ class Shipment extends Model
         }
 
         return self::HL_PLANNING;
+    }
+
+    /**
+     * Admin FSD status bucket (shipments.md §3.1–3.2).
+     */
+    public function getFsdStatusAttribute(): string
+    {
+        $key = strtolower(trim((string) ($this->status ?? '')));
+
+        if ($key === 'cancelled') {
+            return 'cancelled';
+        }
+        if ($key === 'completed') {
+            return 'completed';
+        }
+        if (in_array($key, ['created', 'booking_created', 'survey_completed'], true)) {
+            return 'planning';
+        }
+        if ($key === 'ready_for_pickup') {
+            return 'ready_for_departure';
+        }
+        if (in_array($key, [
+            'cargo_received', 'stuffing_container', 'container_sealed',
+            'train_departed', 'departed', 'train_arrived', 'arrived',
+            'container_unloading', 'unloading', 'proof_of_delivery',
+        ], true)) {
+            return 'in_transit';
+        }
+
+        return 'planning';
     }
 
     // ── Relationships ──
@@ -268,6 +330,16 @@ class Shipment extends Model
     public function trackings(): HasMany
     {
         return $this->hasMany(ShipmentTracking::class)->orderBy('tracked_at', 'desc');
+    }
+
+    public function activities(): HasMany
+    {
+        return $this->hasMany(ShipmentActivity::class)->orderBy('occurred_at');
+    }
+
+    public function documents(): HasMany
+    {
+        return $this->hasMany(ShipmentDocument::class)->orderBy('created_at');
     }
 
     public function invoice(): HasOne

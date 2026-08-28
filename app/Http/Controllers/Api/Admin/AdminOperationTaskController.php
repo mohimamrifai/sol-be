@@ -9,6 +9,7 @@ use App\Enums\OperationType;
 use App\Http\Controllers\Controller;
 use App\Models\AdminActivityLog;
 use App\Models\OperationTask;
+use App\Models\Shipment;
 use App\Services\AdminActivityLogger;
 use App\Services\OperationTaskService;
 use Illuminate\Http\JsonResponse;
@@ -27,7 +28,9 @@ class AdminOperationTaskController extends Controller
         $operationType = $this->resolveOperationType($request);
         $today = now()->toDateString();
 
-        $base = OperationTask::query()->where('operation_type', $operationType);
+        $base = OperationTask::query()
+            ->where('operation_type', $operationType)
+            ->whereHas('shipment', fn ($q) => $q->whereNotIn('status', Shipment::planningStatuses()));
 
         return response()->json([
             'data' => [
@@ -48,6 +51,7 @@ class AdminOperationTaskController extends Controller
 
         $query = OperationTask::query()
             ->where('operation_type', $operationType)
+            ->whereHas('shipment', fn ($q) => $q->whereNotIn('status', Shipment::planningStatuses()))
             ->with([
                 'shipment.company:id,name',
                 'shipment.booking:id,booking_number',

@@ -25,9 +25,15 @@ class ShipmentObserver
     {
         $this->syncAutoCharges($shipment);
 
-        if ($shipment->wasRecentlyCreated || $shipment->wasChanged([
-            'shipment_coverage', 'pickup_vendor_id', 'delivery_vendor_id', 'pickup_scheduled_at',
-        ])) {
+        $shouldSyncTasks = $shipment->isOperationsEligible() && (
+            ($shipment->wasChanged('status') && $shipment->status === 'ready_for_pickup')
+            || (
+                ! $shipment->wasRecentlyCreated
+                && $shipment->wasChanged(['shipment_coverage', 'pickup_vendor_id', 'delivery_vendor_id', 'pickup_scheduled_at'])
+            )
+        );
+
+        if ($shouldSyncTasks) {
             $this->operationTaskService->ensureTasksForShipment($shipment);
         }
 

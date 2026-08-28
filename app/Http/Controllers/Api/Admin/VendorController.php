@@ -78,6 +78,28 @@ class VendorController extends Controller
         return response()->json($query->orderBy('name')->paginate($request->per_page ?? 15));
     }
 
+    public function vehicleTypes(Vendor $vendor): JsonResponse
+    {
+        $types = Pricing::query()
+            ->where('is_active', true)
+            ->whereNotNull('vehicle_type')
+            ->whereIn('service_category', ['trucking_pickup', 'trucking_delivery'])
+            ->whereHas('vendorService', fn ($q) => $q
+                ->where('vendor_id', $vendor->id)
+                ->where('is_active', true))
+            ->distinct()
+            ->orderBy('vehicle_type')
+            ->pluck('vehicle_type')
+            ->filter()
+            ->values();
+
+        if ($types->isEmpty()) {
+            $types = collect(config('shipment.vehicle_types', []));
+        }
+
+        return response()->json(['data' => $types]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $this->validateVendor($request);

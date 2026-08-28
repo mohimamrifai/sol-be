@@ -4,16 +4,19 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Enums\OperationType;
 use App\Enums\PodStatus;
 use App\Models\ProofOfDelivery;
 use App\Models\Shipment;
+use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
 class ProofOfDeliveryService
 {
-    public function __construct(private AdminActivityLogger $activityLogger) {}
+    public function __construct(
+        private AdminActivityLogger $activityLogger,
+        private ShipmentActivityLogger $shipmentActivityLogger,
+    ) {}
 
     public function ensureForShipment(Shipment $shipment, ?int $actorUserId = null): ProofOfDelivery
     {
@@ -94,6 +97,22 @@ class ProofOfDeliveryService
             'verified_at' => null,
         ]);
 
+        $shipment = $pod->shipment;
+        if ($shipment) {
+            $shipment->trackings()->create([
+                'status' => 'pod_uploaded',
+                'notes' => 'POD Uploaded',
+                'tracked_at' => $now,
+                'updated_by' => $actorUserId,
+            ]);
+            $this->shipmentActivityLogger->log(
+                $shipment,
+                'pod_uploaded',
+                'POD diunggah.',
+                $actorUserId ? User::query()->find($actorUserId) : null,
+            );
+        }
+
         $this->activityLogger->log(
             'proof_of_delivery',
             'POD diunggah.',
@@ -126,6 +145,20 @@ class ProofOfDeliveryService
                 'status' => 'completed',
                 'completion_verified_at' => $now,
             ]);
+
+            $shipment->trackings()->create([
+                'status' => 'completed',
+                'notes' => 'Completed',
+                'tracked_at' => $now,
+                'updated_by' => $actorUserId,
+            ]);
+
+            $this->shipmentActivityLogger->log(
+                $shipment,
+                'status_completed',
+                'Shipment selesai setelah POD diterima.',
+                $actorUserId ? User::query()->find($actorUserId) : null,
+            );
         }
 
         $this->activityLogger->log(

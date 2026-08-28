@@ -70,6 +70,9 @@ class OperationTaskService
             throw new \RuntimeException('Task sudah selesai.');
         }
 
+        $task->loadMissing('shipment');
+        $this->assertTransportReadyForOperation($task);
+
         $task->update([
             'status' => OperationTaskStatus::InProgress,
             'metadata' => array_merge($task->metadata ?? [], [
@@ -77,6 +80,8 @@ class OperationTaskService
                 'started_by' => $actorUserId,
             ]),
         ]);
+
+        $this->recordOperationTracking($task, starting: true, actorUserId: $actorUserId);
 
         $this->activityLogger->log(
             'operation_task',
@@ -110,15 +115,25 @@ class OperationTaskService
         if ($shipment) {
             if ($task->operation_type === OperationType::Delivery) {
                 $this->proofOfDeliveryService->createFromDeliveryCompletion($shipment, $actorUserId);
+                $shipment->update(['actual_arrival' => $now->toDateString()]);
             } else {
                 $nextStatus = $this->shipmentStatusForCompletedTask($task->operation_type);
                 if ($nextStatus) {
-                    $shipment->update(['status' => $nextStatus]);
+                    $updates = ['status' => $nextStatus];
+                    if ($task->operation_type === OperationType::TrainDeparture) {
+                        $updates['actual_departure'] = $now->toDateString();
+                    }
+                    if ($task->operation_type === OperationType::TrainArrival) {
+                        $updates['actual_arrival'] = $now->toDateString();
+                    }
+                    $shipment->update($updates);
                 }
             }
         }
 
         $this->containerAssetService->handleOperationTaskCompleted($task, $actorUserId);
+
+        $this->recordOperationTracking($task, starting: false, actorUserId: $actorUserId);
 
         $this->activityLogger->log(
             'operation_task',
@@ -195,5 +210,82 @@ class OperationTaskService
             OperationType::Delivery => 'proof_of_delivery',
             OperationType::ProofOfDelivery => 'proof_of_delivery',
         };
+    }
+
+    private function assertTransportReadyForOperation(OperationTask $task): void
+    {
+        $shipment = $task->shipment;
+        if (! $shipment) {
+            return;
+        }
+
+        if ($task->operation_type === OperationType::Pickup) {
+            if (! $shipment->pickup_vehicle_plate) {
+                throw new \RuntimeException('Nomor polisi kendaraan pickup wajib diisi sebelum proses pickup dimulai.');
+            }
+        }
+
+        if ($task->operation_type === OperationType::Delivery) {
+            if (! $shipment->delivery_vehicle_plate) {
+                throw new \RuntimeException('Nomor polisi kendaraan delivery wajib diisi sebelum proses delivery dimulai.');
+            }
+        }
+    }
+
+    private function recordOperationTracking(OperationTask $task, bool $starting, ?int $actorUserId): void
+    {
+        $shipment = $task->shipment;
+        if (! $shipment || ! $task->operation_type) {
+            return;
+        }
+
+        $status = $this->trackingStatusForOperation($task->operation_type, $starting);
+        if (! $status) {
+            return;
+        }
+
+        $shipment->trackings()->create([
+            'status' => $status,
+            'notes' => $this->trackingTitle($status),
+            'tracked_at' => now(),
+            'updated_by' => $actorUserId,
+        ]);
+    }
+
+    private function trackingStatusForOperation(OperationType $type, bool $starting): ?string
+    {
+        return match ($type) {
+            OperationType::Pickup => $starting ? 'pickup_in_progress' : 'pickup_completed',
+            OperationType::GateInOrigin => $starting ? null : 'gate_in_origin',
+            OperationType::Loading => $starting ? null : 'loaded_to_train',
+            OperationType::TrainDeparture => $starting ? null : 'train_departed',
+            OperationType::TrainArrival => $starting ? null : 'train_arrived',
+            OperationType::GateOutDestination => $starting ? null : 'gate_out_destination',
+            OperationType::Delivery => $starting ? 'out_for_delivery' : 'delivered',
+            OperationType::ProofOfDelivery => $starting ? null : 'pod_uploaded',
+            default => null,
+        };
+    }
+
+    private function trackingTitle(string $status): string
+    {
+        $map = [
+            'pickup_in_progress' => 'Pickup In Progress',
+            'delivery_in_progress' => 'Delivery In Progress',
+            'pickup_completed' => 'Pickup Completed',
+            'arrived_origin_yard' => 'Arrived Origin Yard',
+            'gate_in_origin' => 'Gate In Origin',
+            'loaded_to_train' => 'Loaded to Train',
+            'train_departed' => 'Train Departed',
+            'train_arrived' => 'Train Arrived',
+            'gate_out_destination' => 'Gate Out Destination',
+            'container_released' => 'Container Released',
+            'out_for_delivery' => 'Out for Delivery',
+            'delivered' => 'Delivered',
+            'pod_uploaded' => 'POD Uploaded',
+            'completed' => 'Completed',
+        ];
+
+        return $map[$status] ?? ucwords(str_replace('_', ' ', $status));
     }
 }

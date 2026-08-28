@@ -236,11 +236,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Shipment Management
         Route::get('shipments/stats', [AdminShipmentController::class, 'stats']);
+        Route::get('shipments/options', [AdminShipmentController::class, 'options']);
         Route::get('shipments', [AdminShipmentController::class, 'index']);
         Route::get('shipments/{shipment}', [AdminShipmentController::class, 'show']);
         Route::put('shipments/{shipment}', [AdminShipmentController::class, 'update']);
         Route::post('shipments/{shipment}/ready-for-departure', [AdminShipmentController::class, 'readyForDeparture']);
+        Route::post('shipments/{shipment}/generate-consignment-note', [AdminShipmentController::class, 'generateConsignmentNote']);
         Route::post('shipments/{shipment}/cancel', [AdminShipmentController::class, 'cancelShipment']);
+        Route::post('shipments/{shipment}/documents', [AdminShipmentController::class, 'storeDocument']);
+        Route::get('shipments/{shipment}/documents/{document}', [AdminShipmentController::class, 'downloadDocument']);
         Route::post('shipments/{shipment}/tracking', [AdminShipmentController::class, 'updateTracking']);
         Route::post('shipments/{shipment}/containers', [AdminShipmentController::class, 'addContainer']);
         Route::get('shipments/{shipment}/available-containers', [AdminShipmentController::class, 'availableContainers']);
@@ -292,6 +296,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Vendor & Pricing Management
         Route::get('vendors/stats', [VendorController::class, 'stats']);
+        Route::get('vendors/{vendor}/vehicle-types', [VendorController::class, 'vehicleTypes']);
         Route::post('vendors/{vendor}/deactivate', [VendorController::class, 'deactivate']);
         Route::post('vendors/{vendor}/contacts', [VendorController::class, 'storeContact']);
         Route::put('vendors/{vendor}/contacts/{contact}', [VendorController::class, 'updateContact']);

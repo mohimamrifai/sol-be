@@ -41,7 +41,7 @@ final class ShipmentConversionService
                 'width' => $pkg->width,
                 'height' => $pkg->height,
                 'cbm' => $pkg->volume_cbm,
-                'placement_type' => 'loose',
+                'placement_type' => 'floor',
             ]);
         }
 
@@ -53,7 +53,7 @@ final class ShipmentConversionService
                 'quantity' => 1,
                 'gross_weight' => $booking->estimated_weight,
                 'cbm' => $booking->estimated_cbm,
-                'placement_type' => 'loose',
+                'placement_type' => 'floor',
             ]);
         }
     }

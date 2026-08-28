@@ -134,10 +134,22 @@ class ShipmentViewService
 
     public function cargo(Shipment $shipment): array
     {
+        if (is_array($shipment->cargo_snapshot) && $shipment->cargo_snapshot !== []) {
+            return $shipment->cargo_snapshot;
+        }
+
+        return $this->buildCargoFromBooking($shipment);
+    }
+
+    public function buildCargoFromBooking(Shipment $shipment): array
+    {
         $booking = $shipment->booking;
         if (! $booking) {
             return ['service_kind' => null, 'packages' => [], 'containers' => [], 'summary' => null];
         }
+
+        $booking->loadMissing(['packages.cargoCategory', 'containers.containerType', 'serviceType']);
+        $shipment->loadMissing('serviceType');
 
         $serviceCode = strtoupper((string) ($shipment->serviceType?->code ?? $booking->serviceType?->code ?? ''));
         $isFcl = $serviceCode === 'FCL' || $serviceCode === 'FTL';
@@ -151,6 +163,7 @@ class ShipmentViewService
             'piece_count' => (int) ($p->piece_count ?? 1),
             'weight_kg' => (float) $p->weight_kg,
             'volume_cbm' => (float) $p->volume_cbm,
+            'chargeable_weight_kg' => max((float) $p->weight_kg, (float) ($p->volume_cbm ?? 0) * 1000),
             'length' => $p->length,
             'width' => $p->width,
             'height' => $p->height,
@@ -191,9 +204,45 @@ class ShipmentViewService
         ];
     }
 
+    /**
+     * Admin FSD §3.16 document grid.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function adminDocuments(Shipment $shipment): array
+    {
+        $shipment->loadMissing(['documents.uploadedByUser:id,name']);
+
+        $supporting = $shipment->documents->map(fn ($doc) => [
+            'id' => $doc->id,
+            'name' => $doc->original_name,
+            'uploaded_by' => $doc->uploadedByUser?->name,
+            'uploaded_at' => $doc->created_at?->toIso8601String(),
+            'mime_type' => $doc->mime_type,
+            'size' => $doc->size,
+        ])->values()->all();
+
+        return [
+            [
+                'key' => 'consignment_note',
+                'label' => 'Consignment Note',
+                'available' => $shipment->waybill_number !== null,
+                'uploaded_by' => null,
+                'uploaded_at' => null,
+            ],
+            [
+                'key' => 'supporting',
+                'label' => 'Supporting Documents',
+                'available' => true,
+                'items' => $supporting,
+            ],
+        ];
+    }
+
     public function trackingTimeline(Shipment $shipment): array
     {
         return $shipment->trackings()
+            ->with('updatedByUser:id,name')
             ->orderBy('tracked_at')
             ->get()
             ->map(fn ($t) => [
@@ -202,6 +251,7 @@ class ShipmentViewService
                 'description' => $t->notes,
                 'location' => $t->location,
                 'status' => $t->status,
+                'actor_name' => $t->updatedByUser?->name ?? 'System',
             ])
             ->all();
     }
@@ -210,30 +260,28 @@ class ShipmentViewService
     {
         $entries = [];
 
-        foreach ($shipment->trackings()->orderBy('tracked_at')->get() as $t) {
+        foreach ($shipment->activities()->with('actorUser:id,name')->orderBy('occurred_at')->get() as $a) {
+            $entries[] = [
+                'occurred_at' => optional($a->occurred_at)->toIso8601String(),
+                'title' => $a->description,
+                'description' => null,
+                'location' => null,
+                'source' => 'shipment',
+                'status' => $a->event_key,
+                'actor_name' => $a->actorUser?->name,
+            ];
+        }
+
+        foreach ($shipment->trackings()->with('updatedByUser:id,name')->orderBy('tracked_at')->get() as $t) {
             $entries[] = [
                 'occurred_at' => optional($t->tracked_at)->toIso8601String(),
-                'title' => $this->trackingTitle((string) $t->status),
+                'title' => 'Tracking diperbarui: '.$this->trackingTitle((string) $t->status),
                 'description' => $t->notes,
                 'location' => $t->location,
                 'source' => 'tracking',
                 'status' => $t->status,
-                'actor_name' => $t->updatedByUser?->name,
+                'actor_name' => $t->updatedByUser?->name ?? 'System',
             ];
-        }
-
-        if ($shipment->booking) {
-            foreach ($shipment->booking->activities()->orderBy('occurred_at')->get() as $a) {
-                $entries[] = [
-                    'occurred_at' => optional($a->occurred_at)->toIso8601String(),
-                    'title' => $a->title,
-                    'description' => $a->description,
-                    'location' => null,
-                    'source' => 'booking',
-                    'status' => $a->activity_type,
-                    'actor_name' => $a->actor?->name,
-                ];
-            }
         }
 
         usort($entries, fn ($a, $b) => strcmp((string) ($a['occurred_at'] ?? ''), (string) ($b['occurred_at'] ?? '')));
@@ -241,24 +289,43 @@ class ShipmentViewService
         return $entries;
     }
 
+    public function trackingTimelineTitle(string $status): string
+    {
+        return $this->trackingTitle($status);
+    }
+
     private function trackingTitle(string $status): string
     {
         $map = [
+            'shipment_created' => 'Shipment Created',
+            'pickup_in_progress' => 'Pickup In Progress',
+            'delivery_in_progress' => 'Delivery In Progress',
+            'pickup_completed' => 'Pickup Completed',
+            'arrived_origin_yard' => 'Arrived Origin Yard',
+            'gate_in_origin' => 'Gate In Origin',
+            'loaded_to_train' => 'Loaded to Train',
+            'train_departed' => 'Train Departed',
+            'train_arrived' => 'Train Arrived',
+            'gate_out_destination' => 'Gate Out Destination',
+            'container_released' => 'Container Released',
+            'out_for_delivery' => 'Out for Delivery',
+            'delivered' => 'Delivered',
+            'pod_uploaded' => 'POD Uploaded',
+            'completed' => 'Completed',
+            'cancelled' => 'Cancelled',
             'booking_created' => 'Booking dibuat',
-            'created' => 'Shipment dibuat',
+            'shipment_created' => 'Shipment Created',
+            'created' => 'Shipment Created',
             'survey_completed' => 'Survey selesai',
             'cargo_received' => 'Kargo diterima di origin',
             'stuffing_container' => 'Stuffing kontainer selesai',
             'container_sealed' => 'Kontainer disegel',
-            'train_departed' => 'Kereta berangkat',
             'departed' => 'Shipment berangkat',
-            'train_arrived' => 'Kereta tiba di destination',
             'arrived' => 'Shipment tiba',
             'container_unloading' => 'Bongkar kontainer selesai',
             'unloading' => 'Bongkar muat selesai',
-            'ready_for_pickup' => 'Siap diambil customer',
-            'completed' => 'Shipment selesai',
-            'cancelled' => 'Shipment dibatalkan',
+            'ready_for_pickup' => 'Ready for Departure',
+            'proof_of_delivery' => 'Proof of Delivery',
         ];
 
         return $map[$status] ?? ucwords(str_replace('_', ' ', $status));

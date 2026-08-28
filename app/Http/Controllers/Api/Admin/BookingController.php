@@ -11,6 +11,8 @@ use App\Services\BookingDraftExpiryService;
 use App\Services\BookingPersistenceService;
 use App\Services\BookingPriceEstimateService;
 use App\Services\ShipmentConversionService;
+use App\Services\ShipmentActivityLogger;
+use App\Services\ShipmentViewService;
 use App\Support\SystemConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +26,8 @@ class BookingController extends Controller
         private BookingPriceEstimateService $priceEstimateService,
         private BookingPersistenceService $bookingPersistence,
         private ShipmentConversionService $shipmentConversion,
+        private ShipmentViewService $shipmentView,
+        private ShipmentActivityLogger $shipmentActivityLogger,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -678,6 +682,7 @@ class BookingController extends Controller
 
         $shipment = Shipment::create([
             'booking_id' => $booking->id,
+            'waybill_number' => (new Shipment)->generateWaybillNumber(),
             'company_id' => $booking->company_id,
             'origin_location_id' => $booking->origin_location_id,
             'destination_location_id' => $booking->destination_location_id,
@@ -702,12 +707,24 @@ class BookingController extends Controller
 
         $this->shipmentConversion->copyCargoFromBooking($shipment, $booking);
 
+        $shipment->update([
+            'cargo_snapshot' => $this->shipmentView->buildCargoFromBooking($shipment->fresh(['booking.serviceType', 'serviceType'])),
+        ]);
+
         $shipment->trackings()->create([
-            'status' => 'created',
-            'notes' => 'Shipment dibuat dari booking '.$booking->booking_number,
+            'status' => 'shipment_created',
+            'notes' => 'Shipment Created',
             'tracked_at' => now(),
             'updated_by' => $request->user()->id,
         ]);
+
+        $this->shipmentActivityLogger->log(
+            $shipment,
+            'shipment_created',
+            'Shipment dibuat dari Booking '.$booking->booking_number.'.',
+            $request->user(),
+            ['booking_id' => $booking->id, 'booking_number' => $booking->booking_number],
+        );
 
         $this->logBookingActivity($booking, 'booking_converted', 'Booking dikonversi menjadi shipment.', $request->user());
 
