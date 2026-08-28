@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
+use App\Models\InvoiceActivity;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
 use App\Models\PaymentProofAttachment;
@@ -133,7 +134,19 @@ class PaymentController extends Controller
             ],
         ]);
 
-        $invoice->syncStatusFromPayments();
+        $invoice->syncStatusFromPayments($request->user()->id);
+        InvoiceActivity::create([
+            'invoice_id' => $invoice->id,
+            'actor_user_id' => $request->user()->id,
+            'event_key' => 'payment_received',
+            'description' => 'Pembayaran Rp'.number_format((float) $data['payment_amount'], 0, ',', '.').' diterima.',
+            'meta' => [
+                'payment_id' => $payment->id,
+                'amount' => (float) $data['payment_amount'],
+                'reference_number' => $data['payment_reference_no'],
+            ],
+            'occurred_at' => now(),
+        ]);
 
         if (Schema::hasTable('payment_activities')) {
             PaymentActivity::create([
@@ -787,7 +800,15 @@ class PaymentController extends Controller
         $payment->update($update);
 
         if ($isApproved) {
-            $payment->invoice->syncStatusFromPayments();
+            $payment->invoice->syncStatusFromPayments($request->user()->id);
+            InvoiceActivity::create([
+                'invoice_id' => $invoice->id,
+                'actor_user_id' => $request->user()->id,
+                'event_key' => 'payment_received',
+                'description' => 'Pembayaran Rp'.number_format((float) $payment->amount, 0, ',', '.').' diterima.',
+                'meta' => ['payment_id' => $payment->id],
+                'occurred_at' => now(),
+            ]);
         }
 
         $payment->load(['invoice.company', 'invoice.shipment']);

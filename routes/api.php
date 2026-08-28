@@ -9,11 +9,11 @@ use App\Http\Controllers\Api\Admin\AdminReportController;
 use App\Http\Controllers\Api\Admin\AdminRouteController;
 use App\Http\Controllers\Api\Admin\AdminSettingsController;
 use App\Http\Controllers\Api\Admin\AdminStationController;
+use App\Http\Controllers\Api\Admin\AdminTrainScheduleController;
 use App\Http\Controllers\Api\Admin\AdminVendorInvoiceController;
 use App\Http\Controllers\Api\Admin\AdminVendorJobOrderController;
 use App\Http\Controllers\Api\Admin\AdminVendorPaymentController;
 use App\Http\Controllers\Api\Admin\AdminVendorReportController;
-use App\Http\Controllers\Api\Admin\AdminTrainScheduleController;
 use App\Http\Controllers\Api\Admin\AdminYardController;
 use App\Http\Controllers\Api\Admin\BookingController as AdminBookingController;
 use App\Http\Controllers\Api\Admin\BranchController;
@@ -268,6 +268,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('invoices', [AdminInvoiceController::class, 'store']);
         Route::put('invoices/{invoice}', [AdminInvoiceController::class, 'update']);
         Route::post('invoices/{invoice}/issue', [AdminInvoiceController::class, 'issue']);
+        Route::post('invoices/{invoice}/cancel', [AdminInvoiceController::class, 'destroy']);
+        Route::post('invoices/{invoice}/documents', [AdminInvoiceController::class, 'storeDocument']);
+        Route::get('invoices/{invoice}/documents/{document}', [AdminInvoiceController::class, 'downloadDocument']);
         Route::delete('invoices/{invoice}', [AdminInvoiceController::class, 'destroy']);
         Route::post('invoices/{invoice}/generate-payment-link', [AdminPaymentController::class, 'generatePaymentLink']);
 

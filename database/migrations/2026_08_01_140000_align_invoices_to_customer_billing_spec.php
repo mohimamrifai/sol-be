@@ -49,6 +49,14 @@ return new class extends Migration
                 SET status = 'issued'
                 WHERE status = 'draft' AND issued_date IS NOT NULL
             ");
+        } elseif ($driver === 'sqlite') {
+            Schema::table('invoices', function (Blueprint $table): void {
+                $table->date('issued_date')->nullable()->change();
+                $table->date('due_date')->nullable()->change();
+                $table->string('status', 30)->default('draft')->change();
+            });
+
+            DB::table('invoices')->whereIn('status', ['unpaid', 'overdue'])->update(['status' => 'issued']);
         }
     }
 

@@ -9,6 +9,7 @@ use App\Models\InvoiceActivity;
 use App\Models\Shipment;
 use App\Models\User;
 use App\Support\SystemConfig;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 final class InvoiceGenerationService
@@ -96,51 +97,60 @@ final class InvoiceGenerationService
         return $items;
     }
 
-    public function generateDraftInvoice(Shipment $shipment, User $user, string $status = 'draft'): Invoice
+    /**
+     * @param  array{invoice_date?: string, notes?: ?string, items?: list<array{description: string, quantity: int, unit_price: float|int}>}  $attributes
+     */
+    public function generateDraftInvoice(Shipment $shipment, User $user, array $attributes = []): Invoice
     {
-        if ($shipment->invoice()->exists()) {
+        if (strtolower((string) $shipment->status) !== 'completed') {
+            throw new \InvalidArgumentException('Hanya shipment Completed yang dapat di-invoice.');
+        }
+
+        if ($shipment->invoice()->withTrashed()->exists()) {
             throw new \InvalidArgumentException('Shipment sudah memiliki invoice.');
         }
 
-        return DB::transaction(function () use ($shipment, $user, $status) {
-            $items = $this->buildLineItemsFromShipment($shipment);
-
-            $subtotal = 0.0;
-            foreach ($items as $item) {
-                $subtotal += $item['quantity'] * $item['unit_price'];
-            }
-            $subtotal = max(0, $subtotal);
-            $taxBreakdown = SystemConfig::applyTax($subtotal);
-            $taxAmount = $taxBreakdown['tax_amount'];
-            $totalAmount = $taxBreakdown['total_amount'];
-
+        return DB::transaction(function () use ($shipment, $user, $attributes) {
             $shipment->loadMissing([
-                'company:id,name,npwp,address,postpaid_term_days',
+                'company:id,name,company_code,npwp,address,city,province,postal_code,payment_term,postpaid_term_days',
                 'booking:id,booking_number',
                 'originLocation:id,name',
                 'destinationLocation:id,name',
                 'serviceType:id,name',
             ]);
 
-            $issuedDate = now()->toDateString();
-            $termDays = (int) ($shipment->company?->postpaid_term_days ?? 30);
-            $dueDate = now()->addDays($termDays)->toDateString();
+            $items = $attributes['items'] ?? $this->buildLineItemsFromShipment($shipment);
+            $totals = $this->calculateTotals($items);
+            $term = $this->resolvePaymentTerm(
+                $shipment->company?->payment_term,
+                $shipment->company?->postpaid_term_days,
+            );
+            $invoiceDate = Carbon::parse($attributes['invoice_date'] ?? now()->toDateString())->startOfDay();
+            $dueDate = $invoiceDate->copy()->addDays($term['days']);
 
             $invoice = Invoice::create([
                 'shipment_id' => $shipment->id,
                 'company_id' => $shipment->company_id,
-                'issued_date' => $status === 'draft' ? null : $issuedDate,
-                'due_date' => $status === 'draft' ? null : $dueDate,
-                'subtotal' => $subtotal,
-                'tax_amount' => $taxAmount,
-                'total_amount' => $totalAmount,
-                'status' => $status,
+                'issued_date' => $invoiceDate->toDateString(),
+                'due_date' => $dueDate->toDateString(),
+                'subtotal' => $totals['subtotal'],
+                'tax_amount' => $totals['tax_amount'],
+                'total_amount' => $totals['grand_total'],
+                'notes' => $attributes['notes'] ?? null,
+                'status' => 'draft',
                 'created_by' => $user->id,
                 'company_snapshot' => [
                     'name' => $shipment->company?->name,
+                    'company_code' => $shipment->company?->company_code,
                     'npwp' => $shipment->company?->npwp,
                     'address' => $shipment->company?->address,
-                    'payment_terms' => $termDays > 0 ? "Net {$termDays}" : 'COD',
+                    'city' => $shipment->company?->city,
+                    'province' => $shipment->company?->province,
+                    'postal_code' => $shipment->company?->postal_code,
+                    'payment_term' => $term['key'],
+                    'payment_terms' => $term['label'],
+                    'payment_term_days' => $term['days'],
+                    'currency' => 'IDR',
                 ],
                 'shipment_snapshot' => [
                     'shipment_no' => $shipment->shipment_number,
@@ -165,12 +175,81 @@ final class InvoiceGenerationService
             InvoiceActivity::create([
                 'invoice_id' => $invoice->id,
                 'event_key' => 'invoice_created',
-                'description' => 'Invoice dibuat dari shipment '.$shipment->shipment_number.'.',
+                'description' => 'Invoice dibuat.',
+                'meta' => ['shipment_number' => $shipment->shipment_number],
                 'actor_user_id' => $user->id,
                 'occurred_at' => now(),
             ]);
 
             return $invoice->load('items');
         });
+    }
+
+    /**
+     * @param  list<array{description: string, quantity: int, unit_price: float|int}>  $items
+     * @return array{subtotal: float, discount: float, taxable_amount: float, tax_amount: float, grand_total: float}
+     */
+    public function calculateTotals(array $items): array
+    {
+        $subtotal = 0.0;
+        $discount = 0.0;
+
+        foreach ($items as $item) {
+            $amount = round((int) $item['quantity'] * (float) $item['unit_price'], 2);
+            if ($amount < 0 || str_contains(strtolower($item['description']), 'discount')) {
+                $discount += abs($amount);
+            } else {
+                $subtotal += $amount;
+            }
+        }
+
+        $taxableAmount = max(0.0, $subtotal - $discount);
+        $tax = SystemConfig::applyTax($taxableAmount);
+
+        return [
+            'subtotal' => round($subtotal, 2),
+            'discount' => round($discount, 2),
+            'taxable_amount' => round($taxableAmount, 2),
+            'tax_amount' => $tax['tax_amount'],
+            'grand_total' => $tax['total_amount'],
+        ];
+    }
+
+    /**
+     * Resolve current payment_term first, then legacy postpaid days, then system default.
+     *
+     * @return array{key: string, label: string, days: int}
+     */
+    public function resolvePaymentTerm(?string $paymentTerm, mixed $legacyDays = null): array
+    {
+        $normalized = strtolower(trim((string) $paymentTerm));
+        $normalized = str_replace([' ', '-'], '_', $normalized);
+        $normalized = preg_replace('/^net_?/', 'net_', $normalized) ?? $normalized;
+
+        $allowed = [
+            'cod' => 0,
+            'net_7' => 7,
+            'net_14' => 14,
+            'net_30' => 30,
+            'net_45' => 45,
+            'net_60' => 60,
+        ];
+
+        if (! array_key_exists($normalized, $allowed)) {
+            $legacy = is_numeric($legacyDays) ? (int) $legacyDays : null;
+            $days = in_array($legacy, [0, 7, 14, 30, 45, 60], true)
+                ? $legacy
+                : SystemConfig::defaultPostpaidTermDays();
+            $days = in_array($days, [0, 7, 14, 30, 45, 60], true) ? $days : 30;
+            $normalized = $days === 0 ? 'cod' : "net_{$days}";
+        }
+
+        $days = $allowed[$normalized];
+
+        return [
+            'key' => $normalized,
+            'label' => $days === 0 ? 'COD' : "Net {$days}",
+            'days' => $days,
+        ];
     }
 }

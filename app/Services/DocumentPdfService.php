@@ -39,9 +39,15 @@ class DocumentPdfService
 
     public function renderInvoice(Invoice $invoice, bool $tax = false)
     {
-        $invoice->loadMissing(['company', 'shipment.originLocation', 'shipment.destinationLocation', 'shipment.booking', 'items']);
+        if ($tax) {
+            $invoice->loadMissing(['company', 'shipment.originLocation', 'shipment.destinationLocation', 'shipment.booking', 'items']);
 
-        return Pdf::loadView($tax ? 'pdf.tax-invoice' : 'pdf.invoice', ['invoice' => $invoice]);
+            return Pdf::loadView('pdf.tax-invoice', ['invoice' => $invoice]);
+        }
+
+        $presenter = app(InvoicePdfPresenter::class);
+
+        return Pdf::loadView('pdf.invoice', $presenter->present($invoice));
     }
 
     public function renderPaymentReceipt(Payment $payment)

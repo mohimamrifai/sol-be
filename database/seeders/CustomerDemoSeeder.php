@@ -2,13 +2,13 @@
 
 namespace Database\Seeders;
 
-use App\Enums\VendorJobOrderService;
-use App\Enums\VendorJobOrderStatus;
 use App\Enums\CompanyDocumentType;
 use App\Enums\LocationStatus;
 use App\Enums\LocationType;
 use App\Enums\UserRole;
 use App\Enums\UserStatus;
+use App\Enums\VendorJobOrderService;
+use App\Enums\VendorJobOrderStatus;
 use App\Models\Booking;
 use App\Models\BookingActivity;
 use App\Models\BookingAttachment;
@@ -17,6 +17,7 @@ use App\Models\CargoCategory;
 use App\Models\Company;
 use App\Models\CompanyActivity;
 use App\Models\CompanyDocument;
+use App\Models\ContainerType;
 use App\Models\CustomerLocation;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
@@ -1434,7 +1435,7 @@ class CustomerDemoSeeder extends Seeder
             $invoice = VendorInvoice::create([
                 'vendor_company_id' => $vendor->id,
                 'shipment_id' => $jo->id,
-                'invoice_number' => 'INV-V-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT),
+                'invoice_number' => 'INV-V-PORTAL-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT),
                 'invoice_date' => now()->subDays(3)->toDateString(),
                 'due_date' => now()->addDays(14)->toDateString(),
                 'invoice_amount' => 12500000,
@@ -1442,7 +1443,7 @@ class CustomerDemoSeeder extends Seeder
                 'total_amount' => 13875000,
                 'status' => $isPaid ? 'paid' : 'approved',
                 'notes' => 'Invoice untuk job order '.$jo->shipment_number,
-                'file_path' => 'seed/vendor-invoices/INV-V-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT).'.pdf',
+                'file_path' => 'seed/vendor-invoices/INV-V-PORTAL-'.str_pad((string) ($idx + 1), 6, '0', STR_PAD_LEFT).'.pdf',
                 'created_by' => $finance->id,
                 'submitted_at' => now()->subDays(2),
                 'reviewed_by' => $admin->id,
@@ -1452,7 +1453,7 @@ class CustomerDemoSeeder extends Seeder
             if ($isPaid) {
                 VendorPayment::create([
                     'vendor_invoice_id' => $invoice->id,
-                    'payment_number' => 'PAY-V-000001',
+                    'payment_number' => 'PAY-V-PORTAL-000001',
                     'amount' => $invoice->total_amount,
                     'payment_date' => now()->toDateString(),
                     'payment_method' => 'bank_transfer',

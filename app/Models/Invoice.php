@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 class Invoice extends Model
 {
@@ -75,6 +76,11 @@ class Invoice extends Model
         return $this->hasMany(InvoiceActivity::class);
     }
 
+    public function documents(): HasMany
+    {
+        return $this->hasMany(InvoiceDocument::class);
+    }
+
     public function latestPayment(): HasOne
     {
         return $this->hasOne(Payment::class)->latestOfMany();
@@ -112,13 +118,13 @@ class Invoice extends Model
 
     public function assignOpenIssuedStatus(): void
     {
-        $status = \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'sqlite'
+        $status = DB::connection()->getDriverName() === 'sqlite'
             ? 'unpaid'
             : 'issued';
         $this->update(['status' => $status]);
     }
 
-    public function syncStatusFromPayments(): void
+    public function syncStatusFromPayments(?int $actorUserId = null): void
     {
         if ($this->status === 'cancelled') {
             return;
@@ -131,18 +137,27 @@ class Invoice extends Model
         $outstanding = $this->outstandingAmount();
         $paid = $this->paidAmount();
 
-        if ($outstanding <= 0) {
-            $this->update(['status' => 'paid']);
+        $nextStatus = $outstanding <= 0
+            ? 'paid'
+            : ($paid > 0 ? 'partially_paid' : 'issued');
+        $previousStatus = (string) $this->status;
 
-            return;
+        if ($previousStatus !== $nextStatus) {
+            $this->update(['status' => $nextStatus]);
+            $statusLabel = match ($nextStatus) {
+                'partially_paid' => 'Partially Paid',
+                'paid' => 'Paid',
+                'issued' => 'Issued',
+                default => str_replace('_', ' ', ucfirst($nextStatus)),
+            };
+            InvoiceActivity::create([
+                'invoice_id' => $this->id,
+                'actor_user_id' => $actorUserId,
+                'event_key' => 'status_changed',
+                'description' => "Status menjadi {$statusLabel}.",
+                'meta' => ['from' => $previousStatus, 'to' => $nextStatus],
+                'occurred_at' => now(),
+            ]);
         }
-
-        if ($paid > 0) {
-            $this->update(['status' => 'partially_paid']);
-
-            return;
-        }
-
-        $this->assignOpenIssuedStatus();
     }
 }

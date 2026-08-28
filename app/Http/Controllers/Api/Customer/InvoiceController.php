@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\InvoiceActivity;
 use App\Models\User;
-use Barryvdh\DomPDF\Facade\Pdf;
+use App\Services\DocumentPdfService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -369,9 +369,13 @@ class InvoiceController extends Controller
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
-        $invoice->load(['company', 'shipment', 'items']);
+        if (! in_array($invoice->status, ['issued', 'unpaid', 'partially_paid', 'paid'], true)) {
+            return response()->json([
+                'message' => 'Invoice PDF hanya tersedia setelah invoice diterbitkan.',
+            ], 422);
+        }
 
-        $pdf = Pdf::loadView('pdf.invoice', ['invoice' => $invoice]);
+        $pdf = app(DocumentPdfService::class)->renderInvoice($invoice);
 
         return $pdf->download('invoice-'.$invoice->invoice_number.'.pdf');
     }
