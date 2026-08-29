@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Invoice;
+use App\Models\InvoiceActivity;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
 use App\Services\PaymentNumberService;
@@ -354,6 +355,23 @@ class MidtransService
                     'meta' => [
                         'transaction_id' => $transactionId,
                         'invoice_status' => $payment->invoice?->status,
+                    ],
+                    'occurred_at' => now(),
+                ]);
+            }
+
+            // Online settlements must land on the invoice timeline too, the same way a
+            // manually recorded payment does.
+            if ($payment->invoice) {
+                InvoiceActivity::create([
+                    'invoice_id' => $payment->invoice->id,
+                    'event_key' => 'payment_received',
+                    'description' => 'Pembayaran Rp'.number_format((float) $payment->amount, 0, ',', '.').' diterima.',
+                    'meta' => [
+                        'payment_id' => $payment->id,
+                        'amount' => (float) $payment->amount,
+                        'reference_number' => $transactionId,
+                        'channel' => 'midtrans',
                     ],
                     'occurred_at' => now(),
                 ]);

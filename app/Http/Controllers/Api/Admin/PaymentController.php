@@ -10,6 +10,7 @@ use App\Models\PaymentActivity;
 use App\Models\PaymentProofAttachment;
 use App\Services\DocumentPdfService;
 use App\Services\MidtransService;
+use App\Services\PaymentLinkService;
 use App\Services\PaymentNumberService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -100,7 +101,9 @@ class PaymentController extends Controller
         $data = $request->validate([
             'payment_method' => 'required|in:transfer,giro,cash,virtual_account,midtrans',
             'company_bank' => 'required_if:payment_method,transfer|nullable|string|max:120',
-            'account' => 'nullable|string|max:120',
+            // FSD Customer/customer-payment.md §5.3: Account is mandatory for manual payments and
+            // only filled from the callback for Midtrans.
+            'account' => 'required_unless:payment_method,midtrans|nullable|string|max:120',
             'payment_date' => 'required|date',
             'payment_amount' => 'required|numeric|min:0.01',
             'payment_reference_no' => 'required|string|max:120',
@@ -370,7 +373,7 @@ class PaymentController extends Controller
 
         $canRegenerate = $isMidtrans
             && $outstanding > 0
-            && in_array($payment->status, ['pending', 'expired', 'failed', 'cancelled'], true)
+            && in_array($payment->status, ['pending', 'expired', 'cancelled'], true)
             && ! in_array($invoiceArStatus, ['paid'], true);
 
         $supportingDocs = [];
@@ -404,6 +407,7 @@ class PaymentController extends Controller
             'midtrans_order_id' => $payment->midtrans_order_id,
             'midtrans_transaction_id' => $payment->midtrans_transaction_id,
             'status' => $payment->status,
+            'payment_status' => $invoiceArStatus,
             'invoice_ar_status' => $invoiceArStatus,
             'created_at' => $payment->created_at?->toIso8601String(),
             'paid_at' => $payment->paid_at?->toIso8601String(),
@@ -441,8 +445,8 @@ class PaymentController extends Controller
             'invoice_payments' => $invoice->payments,
             'payment_history' => $paymentHistory,
             'online_payment' => $isMidtrans ? [
-                'payment_link' => $midtransResponse['redirect_url'] ?? null,
-                'link_status' => $linkActive ? 'active' : ($linkExpired ? 'expired' : 'inactive'),
+                'payment_link' => app(PaymentLinkService::class)->trackedUrl($payment),
+                'link_status' => $linkActive ? 'active' : 'expired',
                 'expired_at' => $expiredAt,
                 'midtrans_order_id' => $payment->midtrans_order_id,
                 'midtrans_transaction_id' => $payment->midtrans_transaction_id,
@@ -453,9 +457,96 @@ class PaymentController extends Controller
             'activity_timeline' => $timeline,
             'actions' => [
                 'can_record_payment' => in_array($invoiceArStatus, ['unpaid', 'partially_paid', 'overdue'], true),
-                'can_print_receipt' => $invoiceArStatus === 'paid' || $payment->isSuccess(),
+                // FSD Customer/customer-payment.md §5.3: receipt is only printable once the
+                // invoice is fully settled, not on each partial payment.
+                'can_print_receipt' => $invoiceArStatus === 'paid',
                 'can_copy_link' => $isMidtrans && ! empty($midtransResponse['redirect_url']),
                 'can_regenerate_link' => $canRegenerate,
+                'can_generate_link' => $isMidtrans && $outstanding > 0 && ! $linkActive && ! in_array($invoiceArStatus, ['paid'], true),
+            ],
+        ];
+
+        return response()->json(['data' => $payload]);
+    }
+
+    /**
+     * FSD Customer/customer-payment.md §5.3: unpaid invoices without a Payment row still
+     * open on the payment detail screen (not the invoice module).
+     */
+    public function showByInvoice(Invoice $invoice): JsonResponse
+    {
+        $invoice->load([
+            'company',
+            'shipment',
+            'items',
+            'payments' => fn ($q) => $q->orderByDesc('id'),
+        ]);
+
+        $latestPayment = $invoice->payments->first();
+        if ($latestPayment) {
+            return $this->show($latestPayment);
+        }
+
+        $paidAmount = (float) $invoice->paidAmount();
+        $outstanding = $invoice->outstandingAmount();
+        $company = $invoice->company;
+        $invoiceArStatus = $this->resolveInvoiceArStatus($invoice);
+
+        $paymentHistory = $invoice->payments
+            ->sortByDesc(fn (Payment $p) => $p->paid_at ?? $p->created_at)
+            ->values()
+            ->map(function (Payment $p) {
+                return [
+                    'id' => $p->id,
+                    'payment_date' => ($p->paid_at ?? $p->created_at)?->toIso8601String(),
+                    'amount' => (float) $p->amount,
+                    'payment_method' => $p->method ?? $p->payment_type,
+                    'reference_no' => $p->manual_reference_number ?? $p->midtrans_transaction_id ?? $p->midtrans_order_id,
+                    'recorded_by' => '—',
+                    'status' => $p->status,
+                ];
+            });
+
+        $payload = [
+            'id' => null,
+            'invoice_id' => $invoice->id,
+            'is_invoice_only' => true,
+            'payment_number' => null,
+            'payment_no' => null,
+            'status' => $invoiceArStatus,
+            'invoice_ar_status' => $invoiceArStatus,
+            'payment_status' => $invoiceArStatus,
+            'created_at' => $invoice->created_at?->toIso8601String(),
+            'outstanding_amount' => $outstanding,
+            'invoice_paid_amount' => $paidAmount,
+            'customer_info' => [
+                'customer_code' => $company?->company_code,
+                'customer_name' => $company?->name,
+                'payment_terms' => $company?->payment_term ?? $company?->payment_type,
+            ],
+            'invoice' => [
+                'id' => $invoice->id,
+                'invoice_number' => $invoice->invoice_number,
+                'invoice_date' => $invoice->issued_date?->toDateString(),
+                'due_date' => $invoice->due_date?->toDateString(),
+                'total_amount' => (float) $invoice->total_amount,
+                'paid_amount' => $paidAmount,
+                'outstanding_amount' => $outstanding,
+                'status' => $invoice->status,
+                'company' => $company,
+                'shipment' => $invoice->shipment,
+            ],
+            'payment_info' => null,
+            'payment_history' => $paymentHistory,
+            'online_payment' => null,
+            'supporting_documents' => [],
+            'activity_timeline' => [],
+            'actions' => [
+                'can_record_payment' => in_array($invoiceArStatus, ['unpaid', 'partially_paid', 'overdue'], true),
+                'can_print_receipt' => false,
+                'can_generate_link' => $outstanding > 0 && $invoiceArStatus !== 'paid',
+                'can_copy_link' => false,
+                'can_regenerate_link' => false,
             ],
         ];
 
@@ -622,7 +713,9 @@ class PaymentController extends Controller
         return response()->json([
             'message' => 'Link pembayaran berhasil dibuat.',
             'data' => [
-                'payment_url' => $result['redirect_url'],
+                'payment_url' => $payment
+                    ? app(PaymentLinkService::class)->trackedUrl($payment)
+                    : $result['redirect_url'],
                 'payment_id' => $payment?->id,
                 'order_id' => $result['order_id'],
             ],
@@ -688,7 +781,9 @@ class PaymentController extends Controller
         return response()->json([
             'message' => 'Payment Link berhasil di-regenerate.',
             'data' => [
-                'payment_url' => $result['redirect_url'],
+                'payment_url' => $newPayment
+                    ? app(PaymentLinkService::class)->trackedUrl($newPayment)
+                    : $result['redirect_url'],
                 'payment_id' => $newPayment?->id,
                 'order_id' => $result['order_id'],
             ],

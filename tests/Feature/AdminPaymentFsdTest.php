@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Booking;
 use App\Models\Company;
 use App\Models\Invoice;
+use App\Models\InvoiceActivity;
 use App\Models\Location;
 use App\Models\Payment;
 use App\Models\PaymentActivity;
@@ -14,6 +15,8 @@ use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Models\TransportMode;
 use App\Models\User;
+use App\Services\MidtransService;
+use App\Services\PaymentLinkService;
 use Database\Seeders\MasterDataSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -115,6 +118,58 @@ class AdminPaymentFsdTest extends TestCase
         ]);
     }
 
+    public function test_admin_record_payment_requires_account_for_manual_method(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 1_000_000);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->postJson("/api/admin/invoices/{$invoice->id}/record-payment", [
+            'payment_method' => 'cash',
+            'payment_date' => now()->toDateString(),
+            'payment_amount' => 1_000_000,
+            'payment_reference_no' => 'CASH-001',
+        ])->assertStatus(422)->assertJsonValidationErrors('account');
+    }
+
+    public function test_print_receipt_is_only_available_once_invoice_is_paid(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 1_000_000);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->postJson("/api/admin/invoices/{$invoice->id}/record-payment", [
+            'payment_method' => 'transfer',
+            'company_bank' => 'BCA - PT SOL Logistics',
+            'account' => '1234567890',
+            'payment_date' => now()->toDateString(),
+            'payment_amount' => 400_000,
+            'payment_reference_no' => 'TRF-PARTIAL',
+        ])->assertCreated();
+
+        $invoice->refresh();
+        $this->assertSame('partially_paid', $invoice->status);
+
+        $partial = $invoice->payments()->latest('id')->firstOrFail();
+        $this->assertFalse(
+            $this->getJson("/api/admin/payments/{$partial->id}")->assertOk()->json('data.actions.can_print_receipt')
+        );
+
+        $this->postJson("/api/admin/invoices/{$invoice->id}/record-payment", [
+            'payment_method' => 'transfer',
+            'company_bank' => 'BCA - PT SOL Logistics',
+            'account' => '1234567890',
+            'payment_date' => now()->toDateString(),
+            'payment_amount' => 600_000,
+            'payment_reference_no' => 'TRF-FINAL',
+        ])->assertCreated();
+
+        $final = $invoice->payments()->latest('id')->firstOrFail();
+        $this->assertTrue(
+            $this->getJson("/api/admin/payments/{$final->id}")->assertOk()->json('data.actions.can_print_receipt')
+        );
+    }
+
     public function test_admin_payment_detail_includes_online_and_supporting_sections(): void
     {
         $invoice = $this->createInvoice('unpaid', 900_000);
@@ -166,7 +221,10 @@ class AdminPaymentFsdTest extends TestCase
         $response = $this->postJson("/api/admin/invoices/{$invoice->id}/generate-payment-link")
             ->assertCreated();
 
-        $this->assertStringContainsString('sandbox.midtrans.com', (string) $response->json('data.payment_url'));
+        // The shared link is our own tracked redirect so the customer opening it is logged.
+        $paymentUrl = (string) $response->json('data.payment_url');
+        $this->assertStringContainsString('/api/payment-links/', $paymentUrl);
+        $this->get($paymentUrl)->assertRedirect('https://app.sandbox.midtrans.com/snap/v4/redirection/generated');
 
         $this->assertDatabaseHas('payments', [
             'invoice_id' => $invoice->id,
@@ -176,6 +234,105 @@ class AdminPaymentFsdTest extends TestCase
 
         $paymentId = Payment::where('invoice_id', $invoice->id)->value('id');
         $this->assertNotNull(PaymentActivity::where('payment_id', $paymentId)->where('event_key', 'payment_link_generated')->first());
+    }
+
+    public function test_opening_payment_link_logs_activity_and_redirects_to_midtrans(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 400_000);
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => 400_000,
+            'status' => 'pending',
+            'method' => 'midtrans',
+            'midtrans_order_id' => 'INV-'.$invoice->id.'-OPEN01',
+            'expired_at' => now()->addDay(),
+            'midtrans_response' => [
+                'redirect_url' => 'https://app.sandbox.midtrans.com/snap/v4/redirection/open-me',
+            ],
+        ]);
+
+        $trackedUrl = app(PaymentLinkService::class)->trackedUrl($payment);
+        $this->assertNotNull($trackedUrl);
+
+        $this->get($trackedUrl)
+            ->assertRedirect('https://app.sandbox.midtrans.com/snap/v4/redirection/open-me');
+
+        $activity = PaymentActivity::where('payment_id', $payment->id)
+            ->where('event_key', 'payment_link_opened')
+            ->first();
+
+        $this->assertNotNull($activity);
+        $this->assertSame('Customer membuka Payment Link.', $activity->description);
+    }
+
+    public function test_payment_link_cannot_be_opened_without_valid_signature(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 400_000);
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => 400_000,
+            'status' => 'pending',
+            'method' => 'midtrans',
+            'midtrans_order_id' => 'INV-'.$invoice->id.'-OPEN02',
+            'expired_at' => now()->addDay(),
+            'midtrans_response' => ['redirect_url' => 'https://app.sandbox.midtrans.com/snap/v4/redirection/nope'],
+        ]);
+
+        $this->get("/api/payment-links/{$payment->id}")->assertForbidden();
+
+        $this->assertSame(
+            0,
+            PaymentActivity::where('payment_id', $payment->id)->where('event_key', 'payment_link_opened')->count()
+        );
+    }
+
+    public function test_payment_link_is_unusable_once_payment_succeeded(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 400_000);
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => 400_000,
+            'status' => 'success',
+            'method' => 'midtrans',
+            'midtrans_order_id' => 'INV-'.$invoice->id.'-OPEN03',
+            'expired_at' => now()->addDay(),
+            'midtrans_response' => ['redirect_url' => 'https://app.sandbox.midtrans.com/snap/v4/redirection/done'],
+        ]);
+
+        $trackedUrl = app(PaymentLinkService::class)->trackedUrl($payment);
+
+        $this->get($trackedUrl)->assertStatus(410);
+    }
+
+    public function test_midtrans_settlement_logs_payment_received_on_invoice_activity(): void
+    {
+        $invoice = $this->createInvoice('unpaid', 750_000);
+        $payment = Payment::create([
+            'invoice_id' => $invoice->id,
+            'amount' => 750_000,
+            'status' => 'pending',
+            'method' => 'midtrans',
+            'midtrans_order_id' => 'INV-'.$invoice->id.'-SETTLE',
+        ]);
+
+        app(MidtransService::class)->handleNotification([
+            'order_id' => $payment->midtrans_order_id,
+            'transaction_status' => 'settlement',
+            'transaction_id' => 'trx-settle-001',
+            'gross_amount' => '750000.00',
+            'status_code' => '200',
+        ]);
+
+        $invoice->refresh();
+        $this->assertSame('paid', $invoice->status);
+
+        $activity = InvoiceActivity::where('invoice_id', $invoice->id)
+            ->where('event_key', 'payment_received')
+            ->first();
+
+        $this->assertNotNull($activity);
+        $this->assertSame('midtrans', $activity->meta['channel'] ?? null);
+        $this->assertSame('trx-settle-001', $activity->meta['reference_number'] ?? null);
     }
 
     public function test_admin_regenerate_payment_link_requires_pending_or_expired_status(): void
@@ -203,9 +360,12 @@ class AdminPaymentFsdTest extends TestCase
 
         Sanctum::actingAs($this->admin);
 
-        $this->postJson("/api/admin/payments/{$payment->id}/regenerate-payment-link")
+        $paymentUrl = (string) $this->postJson("/api/admin/payments/{$payment->id}/regenerate-payment-link")
             ->assertCreated()
-            ->assertJsonPath('data.payment_url', 'https://app.sandbox.midtrans.com/snap/v4/redirection/regenerated');
+            ->json('data.payment_url');
+
+        $this->get($paymentUrl)
+            ->assertRedirect('https://app.sandbox.midtrans.com/snap/v4/redirection/regenerated');
 
         $this->assertSame(2, Payment::where('invoice_id', $invoice->id)->count());
     }

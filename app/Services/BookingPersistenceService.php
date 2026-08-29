@@ -94,6 +94,12 @@ final class BookingPersistenceService
             'packages.*.is_dangerous_goods' => 'nullable|boolean',
             'packages.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'packages.*.un_number' => 'nullable|string|max:50',
+            'packages.*.packing_group' => 'nullable|string|max:10',
+            'packages.*.proper_shipping_name' => 'nullable|string|max:255',
+            'packages.*.flash_point' => 'nullable|numeric',
+            'packages.*.dg_notes' => 'nullable|string',
+            'packages.*.dg_remark' => 'nullable|string',
+            'packages.*.msds_file_path' => 'nullable|string|max:255',
             'packages_msds_files' => 'nullable|array',
             'packages_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
             'containers' => 'nullable|array',
@@ -111,6 +117,12 @@ final class BookingPersistenceService
             'containers.*.is_dangerous_goods' => 'nullable|boolean',
             'containers.*.dg_class_id' => 'nullable|exists:dg_classes,id',
             'containers.*.un_number' => 'nullable|string|max:50',
+            'containers.*.packing_group' => 'nullable|string|max:10',
+            'containers.*.proper_shipping_name' => 'nullable|string|max:255',
+            'containers.*.flash_point' => 'nullable|numeric',
+            'containers.*.dg_notes' => 'nullable|string',
+            'containers.*.dg_remark' => 'nullable|string',
+            'containers.*.msds_file_path' => 'nullable|string|max:255',
             'containers_msds_files' => 'nullable|array',
             'containers_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
             'attachments' => 'nullable|array',
@@ -240,7 +252,9 @@ final class BookingPersistenceService
         $sequence = 1;
         foreach ($packages as $i => $pkg) {
             $msdsItem = $request->file("packages_msds_files.$i");
-            $pkgMsds = $msdsItem instanceof UploadedFile ? $msdsItem->store('msds_files', 'public') : null;
+            $pkgMsds = $msdsItem instanceof UploadedFile
+                ? $msdsItem->store('msds_files', 'public')
+                : ($this->existingMsdsPath($pkg));
 
             $isDg = $this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null);
 
@@ -281,7 +295,9 @@ final class BookingPersistenceService
         $sequence = 1;
         foreach ($containers as $i => $ctr) {
             $msdsItem = $request->file("containers_msds_files.$i");
-            $ctrMsds = $msdsItem instanceof UploadedFile ? $msdsItem->store('msds_files', 'public') : null;
+            $ctrMsds = $msdsItem instanceof UploadedFile
+                ? $msdsItem->store('msds_files', 'public')
+                : ($this->existingMsdsPath($ctr));
 
             $isDg = $this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null);
 
@@ -374,6 +390,19 @@ final class BookingPersistenceService
     }
 
     /**
+     * Cargo rows are replaced wholesale on every save, so the client echoes back the path of an
+     * already-stored MSDS to keep it attached across edits.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function existingMsdsPath(array $item): ?string
+    {
+        $path = trim((string) ($item['msds_file_path'] ?? ''));
+
+        return $path !== '' ? $path : null;
+    }
+
+    /**
      * @param  array<string, mixed>  $item
      * @return array<string, list<string>>
      */
@@ -393,7 +422,10 @@ final class BookingPersistenceService
         if (empty($item['proper_shipping_name'])) {
             $errors["{$prefix}.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
         }
-        if (! $request->file($msdsKey)) {
+        // An MSDS stored on a previous submit still satisfies the requirement, otherwise every
+        // edit of a dangerous-goods booking would force the user to upload the same file again.
+        $storedMsds = trim((string) ($item['msds_file_path'] ?? ''));
+        if (! $request->file($msdsKey) && $storedMsds === '') {
             $errors[$msdsKey][] = 'MSDS / SDS wajib diunggah.';
         }
 

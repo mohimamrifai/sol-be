@@ -10,6 +10,7 @@ use App\Models\BookingPackage;
 use App\Models\CargoCategory;
 use App\Models\Company;
 use App\Models\CustomerLocation;
+use App\Models\DgClass;
 use App\Models\Location;
 use App\Models\ServiceType;
 use App\Models\TransportMode;
@@ -242,6 +243,110 @@ class AdminBookingFsdTest extends TestCase
         $booking = Booking::findOrFail($response->json('data.id'));
 
         $this->assertSame($this->generalCargo->id, $booking->cargo_category_id);
+    }
+
+    public function test_editing_dangerous_goods_booking_keeps_stored_msds_without_reupload(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $dgCargo = CargoCategory::where('code', 'DG')->firstOrFail();
+        $dgClass = $this->dgClass();
+        $booking = $this->createBooking('draft');
+
+        $package = BookingPackage::create([
+            'booking_id' => $booking->id,
+            'sequence' => 1,
+            'description' => 'Cairan Mudah Terbakar',
+            'piece_count' => 2,
+            'weight_kg' => 50,
+            'cargo_category_id' => $dgCargo->id,
+            'is_dangerous_goods' => true,
+            'dg_class_id' => $dgClass->id,
+            'un_number' => 'UN1203',
+            'packing_group' => 'II',
+            'proper_shipping_name' => 'Gasoline',
+            'msds_file_path' => 'msds_files/existing-msds.pdf',
+        ]);
+
+        $this->putJson("/api/admin/bookings/{$booking->id}", [
+            'company_id' => $this->company->id,
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'shipment_coverage' => 'port_to_port',
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_address' => $this->shipperLocation->address,
+            'shipper_phone' => $this->shipperLocation->pic_mobile,
+            'shipper_location_id' => $this->shipperLocation->id,
+            'consignee_name' => 'Consignee',
+            'consignee_address' => 'Addr',
+            'consignee_phone' => '08222',
+            'packages' => [
+                [
+                    'description' => 'Cairan Mudah Terbakar (revisi)',
+                    'piece_count' => 3,
+                    'weight_kg' => 75,
+                    'cargo_category_id' => $dgCargo->id,
+                    'is_dangerous_goods' => 1,
+                    'dg_class_id' => $dgClass->id,
+                    'un_number' => 'UN1203',
+                    'packing_group' => 'II',
+                    'proper_shipping_name' => 'Gasoline',
+                    'msds_file_path' => $package->msds_file_path,
+                ],
+            ],
+        ])->assertOk();
+
+        $updated = $booking->packages()->firstOrFail();
+        $this->assertSame('Cairan Mudah Terbakar (revisi)', $updated->description);
+        $this->assertSame('msds_files/existing-msds.pdf', $updated->msds_file_path);
+    }
+
+    public function test_editing_dangerous_goods_booking_without_any_msds_is_rejected(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $dgCargo = CargoCategory::where('code', 'DG')->firstOrFail();
+        $dgClass = $this->dgClass();
+        $booking = $this->createBooking('draft');
+
+        $this->putJson("/api/admin/bookings/{$booking->id}", [
+            'company_id' => $this->company->id,
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'shipment_coverage' => 'port_to_port',
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_address' => $this->shipperLocation->address,
+            'shipper_phone' => $this->shipperLocation->pic_mobile,
+            'shipper_location_id' => $this->shipperLocation->id,
+            'consignee_name' => 'Consignee',
+            'consignee_address' => 'Addr',
+            'consignee_phone' => '08222',
+            'packages' => [
+                [
+                    'description' => 'Cairan Mudah Terbakar',
+                    'piece_count' => 1,
+                    'weight_kg' => 10,
+                    'cargo_category_id' => $dgCargo->id,
+                    'is_dangerous_goods' => 1,
+                    'dg_class_id' => $dgClass->id,
+                    'un_number' => 'UN1203',
+                    'packing_group' => 'II',
+                    'proper_shipping_name' => 'Gasoline',
+                ],
+            ],
+        ])->assertStatus(422)->assertJsonValidationErrors('packages_msds_files.0');
+    }
+
+    private function dgClass(): DgClass
+    {
+        return DgClass::firstOrCreate(
+            ['code' => '3'],
+            ['name' => 'Flammable Liquids', 'is_active' => true],
+        );
     }
 
     private function createBooking(string $status): Booking

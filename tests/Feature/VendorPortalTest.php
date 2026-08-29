@@ -554,9 +554,23 @@ class VendorPortalTest extends TestCase
             'estimated_arrival' => now()->addDays(7),
         ]);
 
+        // FSD Customer/shipments.md §3.3: satu booking hanya boleh punya satu shipment.
+        $bookingB = Booking::create([
+            'company_id' => $this->customerCompany->id,
+            'user_id' => $this->customerAdmin->id,
+            'origin_location_id' => $origin->id,
+            'destination_location_id' => $dest->id,
+            'service_type_id' => $service->id,
+            'transport_mode_id' => $mode->id,
+            'shipment_coverage' => 'door_to_door',
+            'status' => 'approved',
+            'shipper_name' => 'S', 'shipper_address' => 'A', 'shipper_phone' => '1',
+            'consignee_name' => 'C', 'consignee_address' => 'A', 'consignee_phone' => '2',
+        ]);
+
         $completedB = Shipment::create([
             'shipment_no' => 'SHP-B', 'shipment_number' => 'JO-B',
-            'booking_id' => $booking->id,
+            'booking_id' => $bookingB->id,
             'company_id' => $this->customerCompany->id,
             'service_type_id' => $service->id,
             'transport_mode_id' => $mode->id,

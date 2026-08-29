@@ -84,7 +84,7 @@ class CustomerRegistrationFsdTest extends TestCase
         $admin->syncRoles(['super_admin']);
         Sanctum::actingAs($admin);
 
-        $this->postJson("/api/admin/companies/{$companyId}/approve")->assertOk();
+        $this->putJson("/api/admin/companies/{$companyId}", ['status' => 'active'])->assertOk();
 
         $company = Company::findOrFail($companyId);
         $user = User::where('company_id', $companyId)->first();
@@ -105,16 +105,17 @@ class CustomerRegistrationFsdTest extends TestCase
         $admin->syncRoles(['super_admin']);
         Sanctum::actingAs($admin);
 
-        $this->postJson("/api/admin/companies/{$companyId}/reject", [
-            'reason' => 'NPWP tidak valid.',
+        $this->putJson("/api/admin/companies/{$companyId}", [
+            'status' => 'rejected',
+            'rejection_reason' => 'NPWP tidak valid.',
         ])->assertOk();
 
         $company = Company::findOrFail($companyId);
         $this->assertSame('rejected', $company->status);
         $this->assertSame('NPWP tidak valid.', $company->rejection_reason);
 
-        Mail::assertSentCount(2);
-        Mail::assertSent(CustomerRegistrationRejectedMail::class);
+        Mail::assertSentCount(1);
+        Mail::assertNotSent(CustomerRegistrationRejectedMail::class);
     }
 
     public function test_check_company_code_endpoint(): void

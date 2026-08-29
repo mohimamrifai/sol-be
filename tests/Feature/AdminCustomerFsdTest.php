@@ -104,12 +104,12 @@ class AdminCustomerFsdTest extends TestCase
 
         Sanctum::actingAs($this->admin);
 
-        $this->postJson("/api/admin/companies/{$company->id}/suspend")
+        $this->putJson("/api/admin/companies/{$company->id}", ['status' => 'suspended'])
             ->assertOk()
             ->assertJsonPath('data.status', 'suspended');
     }
 
-    public function test_admin_reject_requires_reason(): void
+    public function test_admin_can_reject_customer_with_reason_via_status_update(): void
     {
         $company = Company::create([
             'name' => 'Reject Me',
@@ -121,11 +121,13 @@ class AdminCustomerFsdTest extends TestCase
 
         Sanctum::actingAs($this->admin);
 
-        $this->postJson("/api/admin/companies/{$company->id}/reject", [])
-            ->assertStatus(422);
+        $this->putJson("/api/admin/companies/{$company->id}", [
+            'status' => 'rejected',
+        ])->assertUnprocessable();
 
-        $this->postJson("/api/admin/companies/{$company->id}/reject", [
-            'reason' => 'Dokumen tidak lengkap.',
+        $this->putJson("/api/admin/companies/{$company->id}", [
+            'status' => 'rejected',
+            'rejection_reason' => 'Dokumen tidak lengkap.',
         ])->assertOk();
 
         $this->assertDatabaseHas('companies', [

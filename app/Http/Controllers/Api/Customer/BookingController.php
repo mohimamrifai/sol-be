@@ -286,6 +286,7 @@ class BookingController extends Controller
             'packages.*.flash_point' => 'nullable|numeric',
             'packages.*.dg_notes' => 'nullable|string',
             'packages.*.dg_remark' => 'nullable|string',
+            'packages.*.msds_file_path' => 'nullable|string|max:255',
             'packages_msds_files' => 'nullable|array',
             'packages_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
 
@@ -309,6 +310,7 @@ class BookingController extends Controller
             'containers.*.flash_point' => 'nullable|numeric',
             'containers.*.dg_notes' => 'nullable|string',
             'containers.*.dg_remark' => 'nullable|string',
+            'containers.*.msds_file_path' => 'nullable|string|max:255',
             'containers_msds_files' => 'nullable|array',
             'containers_msds_files.*' => 'nullable|file|mimes:pdf|max:5120',
 
@@ -378,7 +380,7 @@ class BookingController extends Controller
                         if (empty($pkg['proper_shipping_name'])) {
                             $errors["packages.$i.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
                         }
-                        if (! $request->file("packages_msds_files.$i")) {
+                        if (! $request->file("packages_msds_files.$i") && trim((string) ($pkg['msds_file_path'] ?? '')) === '') {
                             $errors["packages_msds_files.$i"][] = 'MSDS / SDS wajib diunggah.';
                         }
                     }
@@ -409,7 +411,7 @@ class BookingController extends Controller
                         if (empty($ctr['proper_shipping_name'])) {
                             $errors["containers.$i.proper_shipping_name"][] = 'Proper Shipping Name wajib diisi.';
                         }
-                        if (! $request->file("containers_msds_files.$i")) {
+                        if (! $request->file("containers_msds_files.$i") && trim((string) ($ctr['msds_file_path'] ?? '')) === '') {
                             $errors["containers_msds_files.$i"][] = 'MSDS / SDS wajib diunggah.';
                         }
                     }
@@ -501,7 +503,9 @@ class BookingController extends Controller
                 $sequence = 1;
                 foreach ($packages as $i => $pkg) {
                     $msdsItem = $request->file("packages_msds_files.$i");
-                    $pkgMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $pkgMsds = $msdsItem
+                        ? $msdsItem->store('msds_files', 'public')
+                        : (trim((string) ($pkg['msds_file_path'] ?? '')) ?: null);
                     $isDg = $this->isDangerousCargoCategory($pkg['cargo_category_id'] ?? null);
                     $booking->packages()->create([
                         'sequence' => $sequence++,
@@ -533,7 +537,9 @@ class BookingController extends Controller
                 $sequence = 1;
                 foreach ($containers as $i => $ctr) {
                     $msdsItem = $request->file("containers_msds_files.$i");
-                    $ctrMsds = $msdsItem ? $msdsItem->store('msds_files', 'public') : null;
+                    $ctrMsds = $msdsItem
+                        ? $msdsItem->store('msds_files', 'public')
+                        : (trim((string) ($ctr['msds_file_path'] ?? '')) ?: null);
                     $isDg = $this->isDangerousCargoCategory($ctr['cargo_category_id'] ?? null);
                     $booking->containers()->create([
                         'sequence' => $sequence++,

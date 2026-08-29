@@ -159,6 +159,10 @@ class AdminContainerMovementFsdTest extends TestCase
     {
         $asset = $this->createAvailableContainer('SOLU-MOV-04');
         $shipment = $this->assignAssetToShipment($asset, 'SHP-MOV-ARRIVE');
+
+        // FSD Customer/shipments.md §3.6: operation tasks hanya muncul setelah
+        // shipment melewati status Ready for Departure.
+        $shipment->update(['status' => 'ready_for_pickup']);
         $shipment->update(['status' => 'train_departed']);
 
         $task = OperationTask::query()

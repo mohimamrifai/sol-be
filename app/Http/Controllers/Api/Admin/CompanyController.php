@@ -378,7 +378,7 @@ class CompanyController extends Controller
             'sales_pic_id' => ['nullable', Rule::exists('users', 'id')->where('user_type', 'internal')],
             'account_manager_id' => ['nullable', Rule::exists('users', 'id')->where('user_type', 'internal')],
             'review_notes' => 'nullable|string|max:5000',
-            'rejection_reason' => 'nullable|string|max:500',
+            'rejection_reason' => ['nullable', 'required_if:status,rejected', 'string', 'max:500'],
             'pic_name' => $partial ? 'sometimes|string|max:255' : 'required|string|max:255',
             'pic_email' => $partial
                 ? ['sometimes', 'email', 'max:255', Rule::unique('users', 'email')]

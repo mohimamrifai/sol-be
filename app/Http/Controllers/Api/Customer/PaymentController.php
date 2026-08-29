@@ -10,6 +10,7 @@ use App\Models\PaymentProofAttachment;
 use App\Models\User;
 use App\Services\DocumentPdfService;
 use App\Services\MidtransService;
+use App\Services\PaymentLinkService;
 use App\Services\PaymentNumberService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -373,7 +374,7 @@ class PaymentController extends Controller
                 'online_payment' => [
                     'active' => $linkActive,
                     'link_status' => $linkActive ? 'active' : 'expired',
-                    'link' => $midtransResponse['redirect_url'] ?? null,
+                    'link' => app(PaymentLinkService::class)->trackedUrl($payment),
                     'token' => $midtransResponse['token'] ?? null,
                     'expired_at' => $expiredAt,
                     'payment_gateway' => 'Midtrans',

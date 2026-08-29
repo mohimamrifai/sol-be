@@ -129,6 +129,9 @@ class Shipment extends Model
             if (empty($shipment->shipment_number)) {
                 $shipment->shipment_number = app(DocumentNumberService::class)->generate('SHP');
             }
+            if (empty($shipment->waybill_number)) {
+                $shipment->waybill_number = $shipment->generateWaybillNumber();
+            }
         });
     }
 

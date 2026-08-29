@@ -47,6 +47,7 @@ use App\Http\Controllers\Api\Customer\UserController as CustomerUserController;
 use App\Http\Controllers\Api\ForgotPasswordController;
 use App\Http\Controllers\Api\MasterMetadataController;
 use App\Http\Controllers\Api\MidtransWebhookController;
+use App\Http\Controllers\Api\PaymentLinkController;
 use App\Http\Controllers\Api\PublicBookingEstimateController;
 use App\Http\Controllers\Api\PublicTrackingController;
 use App\Http\Controllers\Api\Vendor\DashboardController;
@@ -96,6 +97,11 @@ Route::prefix('public')->group(function () {
 // Midtrans notification (no auth - called by Midtrans)
 Route::post('/payments/midtrans/notification', [MidtransWebhookController::class, 'notification']);
 
+// Payment Link opened by the customer (no auth - the signature is the credential)
+Route::get('/payment-links/{payment}', [PaymentLinkController::class, 'open'])
+    ->middleware('signed')
+    ->name('payments.link.open');
+
 // ══════════════════════════════════════════════
 //  AUTHENTICATED (memerlukan Sanctum token)
 // ══════════════════════════════════════════════
@@ -117,9 +123,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('companies/stats', [CompanyController::class, 'stats']);
         Route::get('customer-postal-codes', [CompanyController::class, 'postalCodes']);
         Route::apiResource('companies', CompanyController::class);
-        Route::post('companies/{company}/approve', [CompanyController::class, 'approve']);
-        Route::post('companies/{company}/reject', [CompanyController::class, 'reject']);
-        Route::post('companies/{company}/suspend', [CompanyController::class, 'suspend']);
         Route::get('companies/{company}/locations', [AdminCustomerLocationController::class, 'index']);
         Route::post('companies/{company}/locations', [AdminCustomerLocationController::class, 'store']);
         Route::put('companies/{company}/locations/{location}', [AdminCustomerLocationController::class, 'update']);
@@ -279,15 +282,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('invoices/{invoice}/generate-payment-link', [AdminPaymentController::class, 'generatePaymentLink']);
 
         // Payment / AR Management
+        Route::get('invoices/{invoice}/payment-detail', [AdminPaymentController::class, 'showByInvoice']);
         Route::get('payments/stats', [AdminPaymentController::class, 'stats']);
         Route::get('payments/options', [AdminPaymentController::class, 'paymentOptions']);
         Route::get('payments/eligible-invoices', [AdminPaymentController::class, 'eligibleInvoices']);
         Route::get('payments', [AdminPaymentController::class, 'index']);
         Route::get('payments/overdue-invoices', [AdminPaymentController::class, 'overdueInvoices']);
         Route::post('invoices/{invoice}/record-payment', [AdminPaymentController::class, 'recordPayment']);
-        Route::post('payments/{payment}/sync-midtrans', [AdminPaymentController::class, 'syncMidtrans']);
         Route::post('payments/{payment}/regenerate-payment-link', [AdminPaymentController::class, 'regeneratePaymentLink']);
-        Route::post('payments/{payment}/verify-manual', [AdminPaymentController::class, 'verifyManual']);
         Route::post('payments/{payment}/proof', [AdminPaymentController::class, 'storeProof']);
         Route::get('payments/{payment}/proof-preview', [AdminPaymentController::class, 'proofPreview']);
         Route::get('payments/{payment}/proof-download', [AdminPaymentController::class, 'proofDownload']);

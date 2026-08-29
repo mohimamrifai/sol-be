@@ -153,6 +153,10 @@ class AdminFsdPhasesTest extends TestCase
             'shipment_coverages' => ['port_to_port'],
         ]);
 
+        $upcomingBefore = (int) $this->getJson('/api/admin/train-schedules/stats')
+            ->assertOk()
+            ->json('data.upcoming');
+
         $create = $this->postJson('/api/admin/train-schedules', [
             'business_entity' => 'company',
             'train_number' => 'KA201',
@@ -170,7 +174,7 @@ class AdminFsdPhasesTest extends TestCase
 
         $this->getJson('/api/admin/train-schedules/stats')
             ->assertOk()
-            ->assertJsonPath('data.upcoming', 1);
+            ->assertJsonPath('data.upcoming', $upcomingBefore + 1);
 
         $this->getJson("/api/admin/train-schedules/{$scheduleId}")
             ->assertOk()
