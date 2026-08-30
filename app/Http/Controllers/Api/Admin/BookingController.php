@@ -131,37 +131,9 @@ class BookingController extends Controller
         ]);
         $booking->setAttribute('has_shipment', $booking->shipment()->exists());
         $booking->setAttribute('shipment_id', $booking->shipment?->id);
-        $booking->setAttribute('price_breakdown', $this->buildPriceBreakdown($booking));
+        $booking->setAttribute('price_breakdown', $this->priceEstimateService->breakdownForBooking($booking));
 
         return response()->json(['data' => $booking]);
-    }
-
-    private function buildPriceBreakdown(Booking $booking): ?array
-    {
-        if (! $booking->origin_location_id || ! $booking->destination_location_id) {
-            return null;
-        }
-
-        try {
-            $booking->loadMissing('additionalServices');
-            $result = $this->priceEstimateService->estimate([
-                'company_id' => $booking->company_id,
-                'origin_location_id' => $booking->origin_location_id,
-                'destination_location_id' => $booking->destination_location_id,
-                'transport_mode_id' => $booking->transport_mode_id,
-                'service_type_id' => $booking->service_type_id,
-                'shipment_coverage' => $booking->shipment_coverage,
-                'container_type_id' => $booking->container_type_id,
-                'container_count' => $booking->container_count ?? 1,
-                'estimated_weight' => (float) ($booking->estimated_weight ?? 0),
-                'estimated_cbm' => (float) ($booking->estimated_cbm ?? 0),
-                'additional_services' => $booking->additionalServices->pluck('id')->all(),
-            ]);
-
-            return $result['breakdown'] ?? null;
-        } catch (\Throwable) {
-            return null;
-        }
     }
 
     public function update(Request $request, Booking $booking): JsonResponse

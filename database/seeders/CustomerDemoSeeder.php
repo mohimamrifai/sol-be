@@ -107,11 +107,12 @@ class CustomerDemoSeeder extends Seeder
         $this->seedCompanyDocuments($mainCompany, $admin);
         $this->seedCompanyActivities($mainCompany, $admin, $locations);
 
-        $bookings = $this->seedBookings($mainCompany, $customerUsers);
+        $bookings = $this->seedBookings($mainCompany, $customerUsers, $locations);
         $this->seedShipments($bookings, $customerUsers);
         $this->seedTrainScheduleAssignments();
         $internalOps = User::query()->where('email', 'operations@demo.internal.sol.test')->first();
         $this->call(VendorSeeder::class);
+        $this->call(BookingEstimatePricingSeeder::class);
         $this->seedAdminVendorJobOrders($mainCompany, $internalOps ?? $admin);
         $this->call(VendorAdminInvoiceSeeder::class);
         $this->call(VendorAdminPaymentSeeder::class);
@@ -454,9 +455,12 @@ class CustomerDemoSeeder extends Seeder
         ]);
     }
 
-    private function seedBookings(Company $company, $customerUsers): Collection
+    private function seedBookings(Company $company, $customerUsers, Collection $customerLocations): Collection
     {
         $locations = Location::orderBy('id')->get();
+        $headOffice = $customerLocations->first(
+            fn (CustomerLocation $loc) => $loc->type === LocationType::HeadOffice
+        ) ?? $customerLocations->first();
         $modes = TransportMode::orderBy('id')->get();
         $serviceTypes = ServiceType::orderBy('id')->get();
         $containerTypes = ContainerType::orderBy('id')->get();
@@ -478,7 +482,12 @@ class CustomerDemoSeeder extends Seeder
 
         $bookings = collect();
 
-        $bookings->push($this->makeBooking([
+        $make = fn (array $ctx): Booking => $this->makeBooking([
+            ...$ctx,
+            'shipper_location' => $headOffice,
+        ]);
+
+        $bookings->push($make([
             'company' => $company,
             'creator' => $admin,
             'origin' => $origin,
@@ -494,7 +503,7 @@ class CustomerDemoSeeder extends Seeder
             'remarks' => 'Draft baru, menunggu data final.',
         ]));
 
-        $bookings->push($this->makeBooking([
+        $bookings->push($make([
             'company' => $company,
             'creator' => $ops,
             'origin' => $origin,
@@ -510,7 +519,7 @@ class CustomerDemoSeeder extends Seeder
             'remarks' => 'Draft LCL untuk pengujian kapasitas.',
         ]));
 
-        $bookings->push($this->makeBooking([
+        $bookings->push($make([
             'company' => $company,
             'creator' => $admin,
             'origin' => $origin,
@@ -526,7 +535,7 @@ class CustomerDemoSeeder extends Seeder
         ]));
 
         for ($i = 1; $i <= 3; $i++) {
-            $bookings->push($this->makeBooking([
+            $bookings->push($make([
                 'company' => $company,
                 'creator' => $ops,
                 'origin' => $origin,
@@ -543,7 +552,7 @@ class CustomerDemoSeeder extends Seeder
         }
 
         for ($i = 1; $i <= 3; $i++) {
-            $bookings->push($this->makeBooking([
+            $bookings->push($make([
                 'company' => $company,
                 'creator' => $admin,
                 'origin' => $origin,
@@ -566,7 +575,7 @@ class CustomerDemoSeeder extends Seeder
 
         $approvedBookings = collect();
         for ($i = 1; $i <= 5; $i++) {
-            $b = $this->makeBooking([
+            $b = $make([
                 'company' => $company,
                 'creator' => $ops,
                 'origin' => $origin,
@@ -601,6 +610,12 @@ class CustomerDemoSeeder extends Seeder
     {
         $creator = $ctx['creator'];
         $status = $ctx['status'];
+        $coverage = $ctx['coverage'];
+        $needsPickup = in_array($coverage, ['door_to_door', 'door_to_port'], true);
+        $shipperLocation = $ctx['shipper_location'] ?? null;
+        $consigneePhone = '031-555-'.str_pad((string) (random_int(1000, 9999)), 4, '0', STR_PAD_LEFT);
+        $consigneeName = 'CV '.$ctx['destination']->name.' Logistik';
+        $consigneeAddress = 'Jl. '.$ctx['destination']->name.' No. 88';
 
         $booking = Booking::create([
             'company_id' => $ctx['company']->id,
@@ -612,19 +627,45 @@ class CustomerDemoSeeder extends Seeder
             'container_type_id' => $ctx['container']->id,
             'container_count' => 1,
             'cargo_category_id' => $ctx['cargo']->id,
-            'shipment_coverage' => $ctx['coverage'],
+            'shipment_coverage' => $coverage,
             'estimated_weight' => 18000,
             'estimated_cbm' => 32.5,
             'departure_date' => $ctx['departure_date'],
+            'pickup_date' => $needsPickup
+                ? Carbon::parse($ctx['departure_date'])->subDay()->toDateString()
+                : null,
+            'pickup_time' => $needsPickup ? '09:00:00' : null,
+            'pickup_notes' => $needsPickup ? 'Mohon hubungi security gate terlebih dahulu sebelum pickup.' : null,
             'cargo_description' => 'Peralatan industri dan suku cadang.',
             'is_dangerous_goods' => false,
             'equipment_condition' => 'CLEAN',
-            'shipper_name' => $ctx['company']->name,
-            'shipper_address' => $ctx['company']->address,
-            'shipper_phone' => $ctx['company']->phone,
-            'consignee_name' => 'CV '.$ctx['destination']->name.' Logistik',
-            'consignee_address' => 'Jl. '.$ctx['destination']->name.' No. 88',
-            'consignee_phone' => '031-555-'.str_pad((string) (random_int(1000, 9999)), 4, '0', STR_PAD_LEFT),
+            'shipper_location_id' => $shipperLocation?->id,
+            'shipper_name' => $shipperLocation?->name ?? $ctx['company']->name,
+            'shipper_address' => $shipperLocation?->address ?? $ctx['company']->address,
+            'shipper_phone' => $shipperLocation?->phone ?? $ctx['company']->phone,
+            'shipper_snapshot' => $shipperLocation ? [
+                'company' => $ctx['company']->name,
+                'pic_name' => $shipperLocation->pic_name,
+                'pic_email' => $shipperLocation->pic_email,
+                'pic_mobile' => $shipperLocation->pic_mobile,
+                'country' => $shipperLocation->country,
+                'address' => $shipperLocation->address,
+                'phone' => $shipperLocation->phone,
+                'postal_code' => $shipperLocation->postal_code,
+            ] : null,
+            'consignee_type' => 'external',
+            'consignee_name' => $consigneeName,
+            'consignee_address' => $consigneeAddress,
+            'consignee_phone' => $consigneePhone,
+            'consignee_snapshot' => [
+                'company' => $consigneeName,
+                'pic_name' => 'PIC '.$ctx['destination']->name,
+                'pic_email' => 'pic.'.strtolower($ctx['destination']->code).'@logistik-demo.test',
+                'pic_mobile' => $consigneePhone,
+                'country' => 'Indonesia',
+                'address' => $consigneeAddress,
+                'phone' => $consigneePhone,
+            ],
             'estimated_price' => $ctx['estimated_price'],
             'status' => $status,
             'rejection_reason' => $ctx['rejection_reason'] ?? null,

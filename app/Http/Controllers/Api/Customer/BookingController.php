@@ -642,23 +642,7 @@ class BookingController extends Controller
 
         $costBreakdown = null;
         if ($booking->estimated_price !== null) {
-            $estimate = $this->priceEstimateService->estimate([
-                'origin_location_id' => $booking->origin_location_id,
-                'destination_location_id' => $booking->destination_location_id,
-                'transport_mode_id' => $booking->transport_mode_id,
-                'service_type_id' => $booking->service_type_id,
-                'shipment_coverage' => $booking->shipment_coverage,
-                'container_type_id' => $booking->container_type_id,
-                'container_count' => $booking->container_count ?? 1,
-                'estimated_weight' => $booking->estimated_weight ?? 0,
-                'estimated_cbm' => $booking->estimated_cbm ?? 0,
-                'length' => $booking->length ?? 0,
-                'width' => $booking->width ?? 0,
-                'height' => $booking->height ?? 0,
-                'additional_services' => $booking->additionalServices->pluck('id')->all(),
-                'company_id' => $booking->company_id,
-            ]);
-            $costBreakdown = $estimate['breakdown'] ?? null;
+            $costBreakdown = $this->priceEstimateService->breakdownForBooking($booking);
         }
         $booking->setAttribute('cost_breakdown', $costBreakdown);
 

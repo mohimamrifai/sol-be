@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AdditionalService;
 use App\Models\CustomerDiscount;
 use App\Models\Pricing;
+use App\Models\ServiceType;
 use App\Models\VendorService;
 use Illuminate\Support\Carbon;
 
@@ -21,6 +22,16 @@ class BookingPriceEstimateService
         $companyId = $params['company_id'] ?? null;
         $additionalServiceIds = $params['additional_services'] ?? [];
         $coverage = $params['shipment_coverage'] ?? null;
+        $containerTypeId = $params['container_type_id'] ?? null;
+        $containerCount = (int) ($params['container_count'] ?? 1);
+        $serviceType = isset($params['service_type_id'])
+            ? ServiceType::query()->find($params['service_type_id'])
+            : null;
+        $isFcl = $serviceType && strtoupper((string) $serviceType->code) === 'FCL';
+        if (! $isFcl) {
+            $containerTypeId = null;
+            $containerCount = 0;
+        }
 
         // Find all matching vendor services (routes)
         $vendorServices = VendorService::query()
@@ -37,8 +48,8 @@ class BookingPriceEstimateService
         foreach ($vendorServices as $vendorService) {
             $pricing = $this->findSellPricing(
                 $vendorService,
-                $params['container_type_id'] ?? null,
-                $params['container_count'] ?? 1,
+                $containerTypeId,
+                $containerCount,
                 (float) ($params['estimated_weight'] ?? 0),
                 (float) ($params['estimated_cbm'] ?? 0)
             );
@@ -46,8 +57,8 @@ class BookingPriceEstimateService
             if ($pricing) {
                 $freight = $this->calculateFreightFromPricing(
                     $pricing,
-                    $params['container_type_id'] ?? null,
-                    $params['container_count'] ?? 1,
+                    $containerTypeId,
+                    $containerCount,
                     (float) ($params['estimated_weight'] ?? 0),
                     (float) ($params['estimated_cbm'] ?? 0)
                 );
@@ -204,5 +215,59 @@ class BookingPriceEstimateService
         }
 
         return min((float) $discount->discount_value, $amount);
+    }
+
+    /**
+     * Build cost breakdown for display. Recalculates from vendor sell pricing when
+     * possible; falls back to the stored estimated_price on the booking row.
+     */
+    public function breakdownForBooking(\App\Models\Booking $booking): ?array
+    {
+        if (! $booking->origin_location_id || ! $booking->destination_location_id) {
+            return $booking->estimated_price > 0 ? $this->storedBreakdown($booking) : null;
+        }
+
+        try {
+            $booking->loadMissing('additionalServices');
+            $result = $this->estimate([
+                'company_id' => $booking->company_id,
+                'origin_location_id' => $booking->origin_location_id,
+                'destination_location_id' => $booking->destination_location_id,
+                'transport_mode_id' => $booking->transport_mode_id,
+                'service_type_id' => $booking->service_type_id,
+                'shipment_coverage' => $booking->shipment_coverage,
+                'container_type_id' => $booking->container_type_id,
+                'container_count' => $booking->container_count ?? 1,
+                'estimated_weight' => (float) ($booking->estimated_weight ?? 0),
+                'estimated_cbm' => (float) ($booking->estimated_cbm ?? 0),
+                'additional_services' => $booking->additionalServices->pluck('id')->all(),
+            ]);
+
+            $breakdown = $result['breakdown'] ?? null;
+            if ($breakdown && ($breakdown['total'] ?? 0) > 0) {
+                return $breakdown;
+            }
+        } catch (\Throwable) {
+            // fall through to stored estimate
+        }
+
+        return $booking->estimated_price > 0 ? $this->storedBreakdown($booking) : null;
+    }
+
+    /**
+     * @return array{freight: float, pickup: float, delivery: float, discount: float, additional_services: float, total: float}
+     */
+    private function storedBreakdown(\App\Models\Booking $booking): array
+    {
+        $total = (float) $booking->estimated_price;
+
+        return [
+            'freight' => round($total, 2),
+            'pickup' => 0.0,
+            'delivery' => 0.0,
+            'discount' => 0.0,
+            'additional_services' => 0.0,
+            'total' => round($total, 2),
+        ];
     }
 }
