@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Services\BookingPriceEstimateService;
 use Database\Seeders\MasterDataSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Database\Seeders\VendorSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -257,6 +258,28 @@ class BookingPriceEstimateTest extends TestCase
         $this->assertSame(600000.0, $snapshot['freight']);
         $this->assertSame(600000.0, $snapshot['total']);
         $this->assertNotEmpty($snapshot['captured_at']);
+    }
+
+    public function test_estimate_falls_back_to_vendor_sell_pricing_without_customer_tariff(): void
+    {
+        $this->seed(VendorSeeder::class);
+
+        $result = $this->service->estimate([
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'cargo_category_id' => $this->generalCargo->id,
+            'shipment_coverage' => 'port_to_port',
+            'estimated_weight' => 15_000,
+            'estimated_cbm' => 0,
+            'additional_services' => [],
+        ]);
+
+        $this->assertNull($result['customer_pricing_id']);
+        $this->assertNotNull($result['vendor_service_id']);
+        $this->assertSame(6_500_000.0, $result['breakdown']['freight']);
+        $this->assertSame(6_500_000.0, $result['estimated_price']);
     }
 
     /** @param  array<string, mixed>  $overrides */

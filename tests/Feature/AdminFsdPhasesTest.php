@@ -110,6 +110,25 @@ class AdminFsdPhasesTest extends TestCase
             ->assertJsonStructure(['data', 'current_page']);
     }
 
+    public function test_admin_can_export_shipment_report_excel_and_pdf(): void
+    {
+        $this->actingAsAdmin();
+
+        $this->get('/api/admin/reports/shipments/export?format=excel')
+            ->assertOk();
+
+        $this->get('/api/admin/reports/shipments/export?format=pdf')
+            ->assertOk();
+    }
+
+    public function test_admin_can_export_booking_report(): void
+    {
+        $this->actingAsAdmin();
+
+        $this->get('/api/admin/reports/bookings/export?format=excel')->assertOk();
+        $this->get('/api/admin/reports/vendor-invoices/export?format=pdf')->assertOk();
+    }
+
     public function test_admin_can_list_numbering_formats(): void
     {
         $this->actingAsAdmin();

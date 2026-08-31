@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\VendorInvoice;
 use App\Models\VendorPaymentRequest;
+use App\Services\AdminReportLabelFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -48,7 +49,7 @@ class AdminVendorReportController extends Controller
                 $inv->jobOrders->pluck('job_order_number')->join(', '),
                 $inv->invoice_date?->toDateString(),
                 $inv->total_amount,
-                $inv->getRawOriginal('status') ?? $inv->status,
+                AdminReportLabelFormatter::vendorInvoiceStatus((string) ($inv->getRawOriginal('status') ?? $inv->status)),
             ]),
             'Vendor Invoice Report'
         );
@@ -94,8 +95,8 @@ class AdminVendorReportController extends Controller
                     $req->payment_number,
                     $lastPayment?->payment_date?->toDateString(),
                     $req->paid_amount,
-                    $lastPayment?->payment_method,
-                    $req->status?->value ?? $req->status,
+                    AdminReportLabelFormatter::paymentMethod($lastPayment?->payment_method),
+                    AdminReportLabelFormatter::vendorPaymentStatus((string) ($req->status?->value ?? $req->status)),
                 ];
             }),
             'Vendor Payment Report'

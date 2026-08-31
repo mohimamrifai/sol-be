@@ -17,10 +17,17 @@ class VendorSeeder extends Seeder
 {
     public function run(): void
     {
-        if (Vendor::query()->exists()) {
-            return;
+        if (! Vendor::query()->exists()) {
+            $this->seedVendors();
         }
 
+        // Vendor buy pricing is seeded above; sell pricing is required for
+        // public/customer estimate fallback (BookingPriceEstimateService).
+        $this->call(BookingEstimatePricingSeeder::class);
+    }
+
+    private function seedVendors(): void
+    {
         $jkt = Location::query()->where('code', 'JKT')->first();
         $sub = Location::query()->where('code', 'SUB')->first();
         $roadMode = TransportMode::query()->where('code', 'TRUCK')->first()

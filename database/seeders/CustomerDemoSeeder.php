@@ -112,7 +112,6 @@ class CustomerDemoSeeder extends Seeder
         $this->seedTrainScheduleAssignments();
         $internalOps = User::query()->where('email', 'operations@demo.internal.sol.test')->first();
         $this->call(VendorSeeder::class);
-        $this->call(BookingEstimatePricingSeeder::class);
         $this->seedAdminVendorJobOrders($mainCompany, $internalOps ?? $admin);
         $this->call(VendorAdminInvoiceSeeder::class);
         $this->call(VendorAdminPaymentSeeder::class);

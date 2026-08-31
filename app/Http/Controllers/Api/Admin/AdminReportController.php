@@ -10,6 +10,7 @@ use App\Models\ContainerAsset;
 use App\Models\Invoice;
 use App\Models\Payment;
 use App\Models\Shipment;
+use App\Services\AdminReportLabelFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -79,8 +80,8 @@ class AdminReportController extends Controller
                 $b->company?->name,
                 ($b->originLocation?->code ?? $b->originLocation?->name).' → '.($b->destinationLocation?->code ?? $b->destinationLocation?->name),
                 $b->serviceType?->name,
-                $b->shipment_coverage,
-                $b->status,
+                AdminReportLabelFormatter::shipmentCoverage($b->shipment_coverage),
+                AdminReportLabelFormatter::bookingStatus($b->status),
                 $b->created_at?->toDateString(),
             ]),
             'Booking Report'
@@ -123,7 +124,7 @@ class AdminReportController extends Controller
                 $inv->issued_date?->toDateString(),
                 $inv->due_date?->toDateString(),
                 $inv->total_amount,
-                $inv->status,
+                AdminReportLabelFormatter::invoiceStatus($inv->status),
             ]),
             'Customer Invoice Report'
         );
@@ -163,8 +164,8 @@ class AdminReportController extends Controller
                 $p->invoice?->company?->name,
                 $p->invoice?->invoice_number,
                 $p->amount,
-                $p->method ?? $p->payment_type,
-                $p->status,
+                AdminReportLabelFormatter::paymentMethod($p->method ?? $p->payment_type),
+                AdminReportLabelFormatter::paymentStatus($p->status),
                 $p->paid_at?->toDateString(),
             ]),
             'Customer Payment Report'
@@ -203,10 +204,10 @@ class AdminReportController extends Controller
             $rows->map(fn (ContainerAsset $c) => [
                 $c->container_number,
                 $c->containerType?->name,
-                $c->ownership,
+                AdminReportLabelFormatter::containerOwnership($c->ownership),
                 $c->vendor?->name,
                 $c->currentYard?->name,
-                $c->status,
+                AdminReportLabelFormatter::containerStatus($c->status),
                 $c->manufacture_year,
             ]),
             'Container Report'
@@ -364,9 +365,9 @@ class AdminReportController extends Controller
             $row['customer'],
             $row['route'],
             $row['service_type'],
-            $row['shipment_coverage'],
+            AdminReportLabelFormatter::shipmentCoverage($row['shipment_coverage'] !== null ? (string) $row['shipment_coverage'] : null),
             $row['containers'],
-            $row['status'],
+            AdminReportLabelFormatter::shipmentStatus($row['status'] !== null ? (string) $row['status'] : null),
             $row['pickup_date'],
             $row['departure_date'],
             $row['arrival_date'],
