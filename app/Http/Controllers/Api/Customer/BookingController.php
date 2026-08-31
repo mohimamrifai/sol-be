@@ -816,9 +816,7 @@ class BookingController extends Controller
     }
 
     /**
-     * Cancel a draft or submitted booking (spec L10). For pre-paid companies
-     * the booking is marked rejected with the user-supplied reason so the
-     * activity log keeps a single narrative thread.
+     * Cancel a draft or submitted booking (spec L10).
      */
     public function cancel(Request $request, Booking $booking): JsonResponse
     {
@@ -843,8 +841,9 @@ class BookingController extends Controller
         }
 
         $booking->update([
-            'status' => Booking::STATUS_REJECTED,
-            'rejection_reason' => '[Customer cancel] '.$request->reason,
+            'status' => Booking::STATUS_CANCELLED,
+            'cancellation_reason' => $request->reason,
+            'rejection_reason' => null,
         ]);
         $booking->recordActivity(
             'cancelled',
@@ -883,6 +882,7 @@ class BookingController extends Controller
                 'status',
                 'estimated_price',
                 'rejection_reason',
+                'cancellation_reason',
                 'notes',
                 'approved_by',
                 'approved_at',
@@ -1032,6 +1032,9 @@ class BookingController extends Controller
                 break;
             case Booking::STATUS_REJECTED:
                 $actions = $canMutate ? ['view', 'duplicate'] : ['view'];
+                break;
+            case Booking::STATUS_CANCELLED:
+                $actions = ['view'];
                 break;
             default:
                 $actions = ['view'];

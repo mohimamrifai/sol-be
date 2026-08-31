@@ -69,6 +69,26 @@ final class BookingPersistenceService
     }
 
     /**
+     * @param  array<string, mixed>  $data
+     */
+    public function applyPartySnapshotNames(array &$data): void
+    {
+        if (! empty($data['shipper_snapshot']) && is_array($data['shipper_snapshot'])) {
+            $shipperCompany = $data['shipper_snapshot']['company'] ?? null;
+            if (is_string($shipperCompany) && $shipperCompany !== '') {
+                $data['shipper_name'] = $shipperCompany;
+            }
+        }
+
+        if (! empty($data['consignee_snapshot']) && is_array($data['consignee_snapshot'])) {
+            $consigneeCompany = $data['consignee_snapshot']['company'] ?? null;
+            if (is_string($consigneeCompany) && $consigneeCompany !== '') {
+                $data['consignee_name'] = $consigneeCompany;
+            }
+        }
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function cargoFieldRules(bool $isDraft): array

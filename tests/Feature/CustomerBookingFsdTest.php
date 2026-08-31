@@ -211,6 +211,27 @@ class CustomerBookingFsdTest extends TestCase
         $this->assertSame(['view'], $response->json('data.available_actions'));
     }
 
+    public function test_customer_cancel_sets_cancelled_status(): void
+    {
+        $booking = $this->createBooking($this->company, Booking::STATUS_SUBMITTED);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->postJson("/api/customer/bookings/{$booking->id}/cancel", [
+            'reason' => 'Cargo is no longer being shipped',
+        ])->assertOk();
+
+        $booking->refresh();
+
+        $this->assertSame(Booking::STATUS_CANCELLED, $booking->status);
+        $this->assertSame('Cargo is no longer being shipped', $booking->cancellation_reason);
+        $this->assertNull($booking->rejection_reason);
+        $this->assertDatabaseHas('booking_activities', [
+            'booking_id' => $booking->id,
+            'activity_type' => 'cancelled',
+        ]);
+    }
+
     private function basePayload(bool $isDraft = false): array
     {
         return [

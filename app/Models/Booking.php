@@ -17,9 +17,8 @@ class Booking extends Model
     use HasFactory, SoftDeletes;
 
     /**
-     * Status values allowed in this system (spec L27: Draft, Submitted, Approved, Rejected).
-     * `cancelled` and `confirmed` are kept here only as historical labels for
-     * legacy data; new writes go through the migration that collapsed them.
+     * Status values allowed in this system.
+     * Customer cancel and draft expiry write `cancelled`; admin reject writes `rejected`.
      */
     public const STATUS_DRAFT = 'draft';
 
@@ -29,11 +28,14 @@ class Booking extends Model
 
     public const STATUS_REJECTED = 'rejected';
 
+    public const STATUS_CANCELLED = 'cancelled';
+
     public const STATUSES = [
         self::STATUS_DRAFT,
         self::STATUS_SUBMITTED,
         self::STATUS_APPROVED,
         self::STATUS_REJECTED,
+        self::STATUS_CANCELLED,
     ];
 
     public const SHIPMENT_COVERAGES = [
@@ -62,7 +64,7 @@ class Booking extends Model
         'container_responsibility',
         'confirmed_terms_at',
         'estimated_price', 'status', 'draft_expires_at',
-        'rejection_reason', 'notes',
+        'rejection_reason', 'cancellation_reason', 'notes',
         'approved_by', 'approved_at',
     ];
 

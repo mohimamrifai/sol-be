@@ -199,6 +199,8 @@ class BookingController extends Controller
             return response()->json(['message' => 'The given data was invalid.', 'errors' => $cargoErrors], 422);
         }
 
+        $this->bookingPersistence->applyPartySnapshotNames($data);
+
         $estimateParams = [
             ...$data,
             'additional_services' => array_column($data['additional_services'] ?? [], 'id'),
@@ -392,6 +394,8 @@ class BookingController extends Controller
         if ($cargoErrors = $this->bookingPersistence->validateCargoRules($request, $data, $isDraft, (int) $data['company_id'])) {
             return response()->json(['message' => 'The given data was invalid.', 'errors' => $cargoErrors], 422);
         }
+
+        $this->bookingPersistence->applyPartySnapshotNames($data);
 
         return DB::transaction(function () use ($request, $user, $data, $isDraft) {
             $estimate = null;

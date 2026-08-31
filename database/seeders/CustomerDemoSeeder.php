@@ -573,8 +573,28 @@ class CustomerDemoSeeder extends Seeder
             ]));
         }
 
+        for ($i = 1; $i <= 2; $i++) {
+            $bookings->push($make([
+                'company' => $company,
+                'creator' => $admin,
+                'origin' => $origin,
+                'destination' => $destination2,
+                'service' => $serviceLcl,
+                'mode' => $rail,
+                'container' => $container20,
+                'cargo' => $cargoGeneral,
+                'status' => Booking::STATUS_CANCELLED,
+                'departure_date' => now()->addDays(4 + $i)->toDateString(),
+                'coverage' => 'port_to_port',
+                'estimated_price' => 6500000,
+                'cancellation_reason' => $i === 1
+                    ? 'Cargo is no longer being shipped'
+                    : 'Wrong service / route selected',
+            ]));
+        }
+
         $approvedBookings = collect();
-        for ($i = 1; $i <= 5; $i++) {
+        for ($i = 1; $i <= 11; $i++) {
             $b = $make([
                 'company' => $company,
                 'creator' => $ops,
@@ -640,7 +660,7 @@ class CustomerDemoSeeder extends Seeder
             'is_dangerous_goods' => false,
             'equipment_condition' => 'CLEAN',
             'shipper_location_id' => $shipperLocation?->id,
-            'shipper_name' => $shipperLocation?->name ?? $ctx['company']->name,
+            'shipper_name' => $ctx['company']->name,
             'shipper_address' => $shipperLocation?->address ?? $ctx['company']->address,
             'shipper_phone' => $shipperLocation?->phone ?? $ctx['company']->phone,
             'shipper_snapshot' => $shipperLocation ? [
@@ -669,6 +689,7 @@ class CustomerDemoSeeder extends Seeder
             'estimated_price' => $ctx['estimated_price'],
             'status' => $status,
             'rejection_reason' => $ctx['rejection_reason'] ?? null,
+            'cancellation_reason' => $ctx['cancellation_reason'] ?? null,
             'notes' => $ctx['remarks'] ?? null,
         ]);
 
@@ -689,7 +710,7 @@ class CustomerDemoSeeder extends Seeder
             'occurred_at' => $booking->created_at,
         ]);
 
-        if (in_array($status, [Booking::STATUS_SUBMITTED, Booking::STATUS_APPROVED, Booking::STATUS_REJECTED], true)) {
+        if (in_array($status, [Booking::STATUS_SUBMITTED, Booking::STATUS_APPROVED, Booking::STATUS_REJECTED, Booking::STATUS_CANCELLED], true)) {
             BookingActivity::create([
                 'booking_id' => $booking->id,
                 'actor_id' => $creator->id,
@@ -710,6 +731,18 @@ class CustomerDemoSeeder extends Seeder
                 'title' => 'Booking ditolak',
                 'description' => 'Booking ditolak: '.$ctx['rejection_reason'],
                 'occurred_at' => $booking->created_at->copy()->addHours(2),
+            ]);
+        }
+
+        if ($status === Booking::STATUS_CANCELLED) {
+            BookingActivity::create([
+                'booking_id' => $booking->id,
+                'actor_id' => $creator->id,
+                'actor_role' => 'customer',
+                'activity_type' => 'cancelled',
+                'title' => 'Booking dibatalkan oleh customer',
+                'description' => $ctx['cancellation_reason'] ?? 'Dibatalkan oleh customer.',
+                'occurred_at' => $booking->created_at->copy()->addHours(1),
             ]);
         }
 
@@ -741,16 +774,18 @@ class CustomerDemoSeeder extends Seeder
 
         $cursor = 0;
         $admin = $customerUsers->firstWhere('email', 'admin@customer.test');
+        $usedBookingIds = [];
 
         foreach ($scenarioMatrix as $highLevel => $plan) {
             for ($i = 0; $i < $plan['count']; $i++) {
-                if (! isset($approved[$cursor])) {
-                    $cursor = 0;
+                while (isset($approved[$cursor]) && in_array($approved[$cursor]->id, $usedBookingIds, true)) {
+                    $cursor++;
                 }
-                $booking = $approved[$cursor] ?? $approved->first();
+                $booking = $approved[$cursor] ?? null;
                 if (! $booking) {
                     return;
                 }
+                $usedBookingIds[] = $booking->id;
                 $cursor++;
 
                 $operational = $plan['statuses'][$i] ?? $plan['statuses'][0];
@@ -1299,16 +1334,26 @@ class CustomerDemoSeeder extends Seeder
             'completed',
         ];
 
+        $availableShipments = Shipment::query()
+            ->where('company_id', $customer->id)
+            ->whereNull('vendor_company_id')
+            ->whereIn('booking_id', $approvedBookings->pluck('id'))
+            ->with('booking')
+            ->orderBy('id')
+            ->limit(count($statuses))
+            ->get();
+
         $jobOrders = collect();
 
         foreach ($statuses as $index => $vendorStatus) {
-            $booking = $approvedBookings[$index % max(1, $approvedBookings->count())] ?? null;
-            if (! $booking) {
+            $shipment = $availableShipments[$index] ?? null;
+            if (! $shipment) {
                 break;
             }
 
             $jobOrders->push($this->makeVendorJobOrder([
-                'booking' => $booking,
+                'shipment' => $shipment,
+                'booking' => $shipment->booking ?? $approvedBookings->firstWhere('id', $shipment->booking_id),
                 'customer' => $customer,
                 'vendor' => $vendor,
                 'creator' => in_array($vendorStatus, ['pending_acceptance', 'accepted'], true) ? $vendorAdmin : $ops1,
@@ -1331,32 +1376,44 @@ class CustomerDemoSeeder extends Seeder
         $creator = $params['creator'];
         $status = $params['vendor_status'];
 
-        $shipment = Shipment::create([
-            'booking_id' => $booking->id,
-            'company_id' => $customer->id,
-            'vendor_company_id' => $vendor->id,
-            'vendor_status' => $status,
-            'accepted_at' => in_array($status, ['accepted', 'in_progress', 'waiting_verification', 'completed'], true) ? now()->subDays(2) : null,
-            'completion_submitted_at' => in_array($status, ['waiting_verification', 'completed'], true) ? now()->subDay() : null,
-            'completion_verified_at' => $status === 'completed' ? now() : null,
-            'origin_location_id' => $params['origin']->id ?? $booking->origin_location_id,
-            'destination_location_id' => $params['destination']->id ?? $booking->destination_location_id,
-            'transport_mode_id' => $params['mode']->id ?? $booking->transport_mode_id,
-            'service_type_id' => $params['service']->id ?? $booking->service_type_id,
-            'shipment_coverage' => $booking->shipment_coverage ?? 'door_to_door',
-            'status' => match ($status) {
-                'pending_acceptance' => 'created',
-                'accepted', 'in_progress' => 'cargo_received',
-                'waiting_verification' => 'ready_for_pickup',
-                'completed' => 'completed',
-                default => 'created',
-            },
-            'estimated_departure' => now()->addDays(7),
-            'estimated_arrival' => now()->addDays(10),
-            'is_dangerous_goods' => false,
-            'created_by' => $creator->id,
-            'notes' => 'Job order untuk vendor '.$vendor->name,
-        ]);
+        if (isset($params['shipment']) && $params['shipment'] instanceof Shipment) {
+            $shipment = $params['shipment'];
+            $shipment->update([
+                'vendor_company_id' => $vendor->id,
+                'vendor_status' => $status,
+                'accepted_at' => in_array($status, ['accepted', 'in_progress', 'waiting_verification', 'completed'], true) ? now()->subDays(2) : null,
+                'completion_submitted_at' => in_array($status, ['waiting_verification', 'completed'], true) ? now()->subDay() : null,
+                'completion_verified_at' => $status === 'completed' ? now() : null,
+                'notes' => 'Job order untuk vendor '.$vendor->name,
+            ]);
+        } else {
+            $shipment = Shipment::create([
+                'booking_id' => $booking->id,
+                'company_id' => $customer->id,
+                'vendor_company_id' => $vendor->id,
+                'vendor_status' => $status,
+                'accepted_at' => in_array($status, ['accepted', 'in_progress', 'waiting_verification', 'completed'], true) ? now()->subDays(2) : null,
+                'completion_submitted_at' => in_array($status, ['waiting_verification', 'completed'], true) ? now()->subDay() : null,
+                'completion_verified_at' => $status === 'completed' ? now() : null,
+                'origin_location_id' => $params['origin']->id ?? $booking->origin_location_id,
+                'destination_location_id' => $params['destination']->id ?? $booking->destination_location_id,
+                'transport_mode_id' => $params['mode']->id ?? $booking->transport_mode_id,
+                'service_type_id' => $params['service']->id ?? $booking->service_type_id,
+                'shipment_coverage' => $booking->shipment_coverage ?? 'door_to_door',
+                'status' => match ($status) {
+                    'pending_acceptance' => 'created',
+                    'accepted', 'in_progress' => 'cargo_received',
+                    'waiting_verification' => 'ready_for_pickup',
+                    'completed' => 'completed',
+                    default => 'created',
+                },
+                'estimated_departure' => now()->addDays(7),
+                'estimated_arrival' => now()->addDays(10),
+                'is_dangerous_goods' => false,
+                'created_by' => $creator->id,
+                'notes' => 'Job order untuk vendor '.$vendor->name,
+            ]);
+        }
 
         if ($status === 'pending_acceptance') {
             CompanyActivity::create([

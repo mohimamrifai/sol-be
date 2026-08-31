@@ -39,7 +39,10 @@ final class BookingDraftExpiryService
             ->orderBy('id')
             ->chunkById(100, function ($bookings) use (&$expired) {
                 foreach ($bookings as $booking) {
-                    $booking->update(['status' => 'cancelled']);
+                    $booking->update([
+                        'status' => Booking::STATUS_CANCELLED,
+                        'cancellation_reason' => 'Draft expired automatically ('.SystemConfig::bookingExpiredHours().' hours).',
+                    ]);
                     if (method_exists($booking, 'recordActivity')) {
                         $booking->recordActivity(
                             'draft_expired',
