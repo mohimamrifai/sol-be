@@ -207,12 +207,34 @@ class Booking extends Model
 
     /**
      * True when the booking can still be edited by the customer.
-     * Spec L9: only Draft is editable; Submitted is locked.
+     * FSD customer: only Draft is editable; Submitted is locked.
      */
     public function isEditable(): bool
     {
         return $this->status === self::STATUS_DRAFT
             && ($this->draft_expires_at === null || $this->draft_expires_at->isFuture());
+    }
+
+    /**
+     * True when internal admin/ops may edit the booking (FSD admin action table).
+     * Draft, Submitted, and Confirmed (`approved`) remain editable until convert to shipment.
+     */
+    public function isAdminEditable(): bool
+    {
+        if (in_array($this->status, [self::STATUS_REJECTED, self::STATUS_CANCELLED], true)) {
+            return false;
+        }
+
+        if ($this->shipment()->exists()) {
+            return false;
+        }
+
+        return in_array($this->status, [
+            self::STATUS_DRAFT,
+            self::STATUS_SUBMITTED,
+            self::STATUS_APPROVED,
+            'confirmed',
+        ], true);
     }
 
     /**

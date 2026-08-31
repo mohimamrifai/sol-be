@@ -97,6 +97,23 @@ class AdminBookingFsdTest extends TestCase
         $this->assertSame(1, $response->json('data.draft'));
         $this->assertSame(1, $response->json('data.submitted'));
         $this->assertSame(1, $response->json('data.confirmed'));
+        $this->assertArrayNotHasKey('under_review', $response->json('data'));
+    }
+
+    public function test_submitted_filter_excludes_legacy_under_review_rows(): void
+    {
+        $submitted = $this->createBooking('submitted');
+        $legacy = $this->createBooking('draft');
+        Booking::query()->whereKey($legacy->id)->update(['status' => 'under_review']);
+
+        Sanctum::actingAs($this->admin);
+
+        $ids = collect($this->getJson('/api/admin/bookings?status=submitted')->assertOk()->json('data'))
+            ->pluck('id')
+            ->all();
+
+        $this->assertContains($submitted->id, $ids);
+        $this->assertNotContains($legacy->id, $ids);
     }
 
     public function test_reject_submitted_booking_logs_activity(): void
@@ -126,6 +143,48 @@ class AdminBookingFsdTest extends TestCase
         $this->postJson("/api/admin/bookings/{$booking->id}/reject", [
             'reason' => 'Should fail',
         ])->assertStatus(422);
+    }
+
+    public function test_admin_can_edit_submitted_and_confirmed_bookings(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $submitted = $this->createBooking('submitted');
+        $confirmed = $this->createBooking('approved');
+
+        $this->putJson("/api/admin/bookings/{$submitted->id}", $this->adminUpdatePayload([
+            'shipper_name' => 'Shipper Submitted Updated',
+        ]))->assertOk();
+
+        $this->putJson("/api/admin/bookings/{$confirmed->id}", $this->adminUpdatePayload([
+            'shipper_name' => 'Shipper Confirmed Updated',
+        ]))->assertOk();
+
+        $this->assertSame('Shipper Submitted Updated', $submitted->fresh()->shipper_name);
+        $this->assertSame('Shipper Confirmed Updated', $confirmed->fresh()->shipper_name);
+    }
+
+    public function test_admin_cannot_edit_rejected_or_cancelled_bookings(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $rejected = $this->createBooking('rejected');
+        $cancelled = $this->createBooking('cancelled');
+
+        $this->putJson("/api/admin/bookings/{$rejected->id}", $this->adminUpdatePayload())
+            ->assertStatus(422);
+        $this->putJson("/api/admin/bookings/{$cancelled->id}", $this->adminUpdatePayload())
+            ->assertStatus(422);
+    }
+
+    public function test_customer_booking_is_editable_only_in_draft(): void
+    {
+        $draft = $this->createBooking('draft');
+        $submitted = $this->createBooking('submitted');
+
+        $this->assertTrue($draft->isEditable());
+        $this->assertFalse($submitted->isEditable());
+        $this->assertTrue($submitted->isAdminEditable());
     }
 
     public function test_only_draft_booking_can_be_deleted(): void
@@ -368,5 +427,34 @@ class AdminBookingFsdTest extends TestCase
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',
         ]);
+    }
+
+    /** @param array<string, mixed> $overrides */
+    private function adminUpdatePayload(array $overrides = []): array
+    {
+        return array_merge([
+            'company_id' => $this->company->id,
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'shipment_coverage' => 'port_to_port',
+            'cargo_category_id' => $this->generalCargo->id,
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_address' => $this->shipperLocation->address,
+            'shipper_phone' => $this->shipperLocation->pic_mobile,
+            'shipper_location_id' => $this->shipperLocation->id,
+            'consignee_name' => 'Consignee',
+            'consignee_address' => 'Addr',
+            'consignee_phone' => '08222',
+            'packages' => [
+                [
+                    'description' => 'Carton Elektronik',
+                    'piece_count' => 1,
+                    'weight_kg' => 120,
+                    'cargo_category_id' => $this->generalCargo->id,
+                ],
+            ],
+        ], $overrides);
     }
 }

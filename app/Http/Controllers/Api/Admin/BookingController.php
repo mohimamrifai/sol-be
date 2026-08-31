@@ -46,7 +46,7 @@ class BookingController extends Controller
             if ($request->status === 'converted') {
                 $query->whereHas('shipment');
             } elseif ($request->status === 'submitted') {
-                $query->whereIn('status', ['submitted', 'under_review'])->whereDoesntHave('shipment');
+                $query->where('status', Booking::STATUS_SUBMITTED)->whereDoesntHave('shipment');
             } elseif ($request->status === 'confirmed') {
                 $query->whereIn('status', ['approved', 'confirmed'])->whereDoesntHave('shipment');
             } else {
@@ -108,7 +108,7 @@ class BookingController extends Controller
         return response()->json([
             'data' => [
                 'draft' => (int) ($counts['draft'] ?? 0),
-                'submitted' => (int) (($counts['submitted'] ?? 0) + ($counts['under_review'] ?? 0)),
+                'submitted' => (int) ($counts['submitted'] ?? 0),
                 'confirmed' => (int) (($counts['approved'] ?? 0) + ($counts['confirmed'] ?? 0)),
                 'converted' => $converted,
                 'rejected' => (int) ($counts['rejected'] ?? 0),
@@ -142,11 +142,7 @@ class BookingController extends Controller
             return response()->json(['message' => 'Akses ditolak.'], 403);
         }
 
-        if ($booking->shipment()->exists()) {
-            return response()->json(['message' => 'Booking yang sudah memiliki shipment tidak bisa diubah.'], 422);
-        }
-
-        if (in_array($booking->status, ['cancelled', 'rejected'], true)) {
+        if (! $booking->isAdminEditable()) {
             return response()->json(['message' => 'Booking dengan status ini tidak bisa diubah.'], 422);
         }
 
@@ -477,7 +473,7 @@ class BookingController extends Controller
      */
     public function approve(Request $request, Booking $booking): JsonResponse
     {
-        if (! in_array($booking->status, ['submitted', 'under_review', 'confirmed'])) {
+        if ($booking->status !== Booking::STATUS_SUBMITTED) {
             return response()->json(['message' => 'Booking tidak dalam status yang bisa dikonfirmasi.'], 422);
         }
 
@@ -543,7 +539,7 @@ class BookingController extends Controller
      */
     public function reject(Request $request, Booking $booking): JsonResponse
     {
-        if (! in_array($booking->status, ['submitted', 'under_review'], true)) {
+        if ($booking->status !== Booking::STATUS_SUBMITTED) {
             return response()->json(['message' => 'Booking tidak dalam status yang bisa ditolak.'], 422);
         }
 

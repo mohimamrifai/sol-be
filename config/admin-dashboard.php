@@ -18,8 +18,8 @@ return [
     'fsd_booking_statuses' => [
         'draft',
         'submitted',
-        'under_review',
-        'approved',
+        'confirmed',
         'rejected',
+        'cancelled',
     ],
 ];

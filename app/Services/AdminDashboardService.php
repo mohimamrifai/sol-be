@@ -128,9 +128,9 @@ class AdminDashboardService
         return [
             'draft' => (int) ($counts['draft'] ?? 0),
             'submitted' => (int) ($counts['submitted'] ?? 0),
-            'under_review' => (int) ($counts['under_review'] ?? 0),
-            'approved' => (int) ($counts['approved'] ?? 0),
+            'confirmed' => (int) (($counts['approved'] ?? 0) + ($counts['confirmed'] ?? 0)),
             'rejected' => (int) ($counts['rejected'] ?? 0),
+            'cancelled' => (int) ($counts['cancelled'] ?? 0),
         ];
     }
 
@@ -345,12 +345,12 @@ class AdminDashboardService
         $notifications = [];
 
         if ($user === null || $user->hasFeatureAccess('view_bookings')) {
-            $pendingBookings = Booking::whereIn('status', ['submitted', 'under_review'])->count();
+            $pendingBookings = Booking::where('status', Booking::STATUS_SUBMITTED)->count();
             if ($pendingBookings > 0) {
                 $notifications[] = [
                     'key' => 'pendingBookings',
                     'count' => $pendingBookings,
-                    'link' => '/dashboard/admin/customer/bookings?status=under_review',
+                    'link' => '/dashboard/admin/customer/bookings?status=submitted',
                 ];
             }
         }
