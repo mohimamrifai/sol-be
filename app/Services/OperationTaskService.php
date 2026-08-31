@@ -6,7 +6,7 @@ namespace App\Services;
 
 use App\Enums\OperationTaskStatus;
 use App\Enums\OperationType;
-use App\Enums\VendorJobOrderService;
+use App\Enums\VendorJobOrderService as VendorJobOrderServiceType;
 use App\Models\OperationTask;
 use App\Models\Shipment;
 use App\Models\VendorJobOrder;
@@ -17,6 +17,7 @@ class OperationTaskService
         private AdminActivityLogger $activityLogger,
         private ProofOfDeliveryService $proofOfDeliveryService,
         private ContainerAssetService $containerAssetService,
+        private VendorJobOrderService $vendorJobOrderService,
     ) {}
     public function ensureTasksForShipment(Shipment $shipment): void
     {
@@ -147,11 +148,56 @@ class OperationTaskService
         return $task->fresh();
     }
 
+    public function reassignVendor(OperationTask $task, int $vendorId, ?int $actorUserId = null): OperationTask
+    {
+        if (! in_array($task->operation_type, [OperationType::Pickup, OperationType::Delivery], true)) {
+            throw new \RuntimeException('Manual assignment hanya untuk pickup/delivery.');
+        }
+
+        if (! $task->isEditable()) {
+            throw new \RuntimeException('Tugas operasi tidak dapat di-assign ulang pada status ini.');
+        }
+
+        $task->loadMissing('shipment');
+        $shipment = $task->shipment;
+        if (! $shipment) {
+            throw new \RuntimeException('Shipment tidak ditemukan.');
+        }
+
+        $service = $task->operation_type === OperationType::Pickup
+            ? VendorJobOrderServiceType::Pickup
+            : VendorJobOrderServiceType::Delivery;
+
+        $this->vendorJobOrderService->cancelActiveJobOrders($shipment, $service, $actorUserId);
+
+        if ($task->operation_type === OperationType::Pickup) {
+            $shipment->update(['pickup_vendor_id' => $vendorId]);
+        } else {
+            $shipment->update(['delivery_vendor_id' => $vendorId]);
+        }
+
+        $shipment = $shipment->fresh();
+        $this->vendorJobOrderService->syncFromShipment($shipment, $actorUserId);
+        $this->syncFromVendorJo($shipment);
+
+        $vendorName = \App\Models\Vendor::query()->whereKey($vendorId)->value('name');
+        $this->activityLogger->log(
+            'operation_task',
+            'Vendor '.$task->operation_type->label().' di-assign ulang ke '.($vendorName ?: 'vendor #'.$vendorId).'.',
+            $task->fresh(),
+            'vendor_reassigned',
+            ['vendor_id' => $vendorId],
+            $actorUserId
+        );
+
+        return $task->fresh(['vendorJobOrder.vendor', 'shipment']);
+    }
+
     public function syncFromVendorJo(Shipment $shipment): void
     {
         $mapping = [
-            VendorJobOrderService::Pickup->value => OperationType::Pickup,
-            VendorJobOrderService::Delivery->value => OperationType::Delivery,
+            VendorJobOrderServiceType::Pickup->value => OperationType::Pickup,
+            VendorJobOrderServiceType::Delivery->value => OperationType::Delivery,
         ];
 
         $jobOrders = VendorJobOrder::query()

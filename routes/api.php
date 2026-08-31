@@ -365,6 +365,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('operation-tasks/{operationType}/stats', [AdminOperationTaskController::class, 'stats']);
         Route::get('operation-tasks/{operationType}', [AdminOperationTaskController::class, 'index']);
         Route::get('operation-tasks/task/{operationTask}', [AdminOperationTaskController::class, 'show']);
+        Route::post('operation-tasks/{operationTask}/assign-vendor', [AdminOperationTaskController::class, 'assignVendor']);
         Route::post('operation-tasks/{operationTask}/start', [AdminOperationTaskController::class, 'start']);
         Route::post('operation-tasks/{operationTask}/complete', [AdminOperationTaskController::class, 'complete']);
         Route::put('operation-tasks/{operationTask}/remark', [AdminOperationTaskController::class, 'updateRemark']);

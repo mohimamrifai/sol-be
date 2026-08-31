@@ -108,6 +108,22 @@ class VendorJobOrderService
         $this->logActivity($jo, 'Status menjadi Completed.', $actorUserId);
     }
 
+    public function cancelActiveJobOrders(
+        Shipment $shipment,
+        VendorJobOrderServiceType $service,
+        ?int $actorUserId = null
+    ): void {
+        VendorJobOrder::query()
+            ->where('shipment_id', $shipment->id)
+            ->where('service_type', $service->value)
+            ->whereNotIn('status', [VendorJobOrderStatus::Completed, VendorJobOrderStatus::Cancelled])
+            ->get()
+            ->each(function (VendorJobOrder $jo) use ($actorUserId) {
+                $jo->update(['status' => VendorJobOrderStatus::Cancelled]);
+                $this->logActivity($jo, 'JO dibatalkan karena reassignment vendor.', $actorUserId);
+            });
+    }
+
     private function upsertJobOrder(
         Shipment $shipment,
         VendorJobOrderServiceType $service,

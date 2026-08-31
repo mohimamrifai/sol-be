@@ -187,6 +187,43 @@ class AdminOperationTaskController extends Controller
         return response()->json(['message' => 'Dokumen diunggah.', 'data' => $this->transformDetail($operationTask->fresh())], 201);
     }
 
+    public function assignVendor(Request $request, OperationTask $operationTask): JsonResponse
+    {
+        if (! in_array($operationTask->operation_type, [OperationType::Pickup, OperationType::Delivery], true)) {
+            return response()->json(['message' => 'Manual assignment hanya untuk pickup/delivery.'], 422);
+        }
+
+        $data = $request->validate([
+            'vendor_id' => 'required|exists:vendors,id',
+        ]);
+
+        try {
+            $this->operationTaskService->reassignVendor(
+                $operationTask,
+                (int) $data['vendor_id'],
+                $request->user()?->id
+            );
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $operationTask->load([
+            'shipment.company',
+            'shipment.booking',
+            'shipment.originLocation',
+            'shipment.destinationLocation',
+            'shipment.serviceType',
+            'shipment.containers.containerType',
+            'shipment.items',
+            'vendorJobOrder.vendor',
+        ]);
+
+        return response()->json([
+            'message' => 'Vendor berhasil di-assign ulang.',
+            'data' => $this->transformDetail($operationTask),
+        ]);
+    }
+
     private function resolveOperationType(Request $request): OperationType
     {
         $type = $request->route('operationType') ?? $request->input('operation_type');
@@ -261,6 +298,8 @@ class AdminOperationTaskController extends Controller
             'is_editable' => $task->isEditable(),
             'can_start' => $task->status === OperationTaskStatus::Waiting,
             'can_complete' => $task->status === OperationTaskStatus::InProgress,
+            'can_reassign_vendor' => $task->isEditable()
+                && in_array($task->operation_type, [OperationType::Pickup, OperationType::Delivery], true),
             'shipment' => $shipment ? [
                 'id' => $shipment->id,
                 'shipment_number' => $shipment->shipment_number,
