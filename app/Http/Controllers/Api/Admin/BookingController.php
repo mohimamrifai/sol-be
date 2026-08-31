@@ -132,6 +132,8 @@ class BookingController extends Controller
         $booking->setAttribute('has_shipment', $booking->shipment()->exists());
         $booking->setAttribute('shipment_id', $booking->shipment?->id);
         $booking->setAttribute('price_breakdown', $this->priceEstimateService->breakdownForBooking($booking));
+        $booking->setAttribute('customer_location_name', $booking->customerLocationName());
+        $booking->setAttribute('shipper_company_name', $booking->shipperCompanyName());
 
         return response()->json(['data' => $booking]);
     }
@@ -195,7 +197,7 @@ class BookingController extends Controller
             return response()->json(['message' => 'The given data was invalid.', 'errors' => $cargoErrors], 422);
         }
 
-        $this->bookingPersistence->applyPartySnapshotNames($data);
+        $this->bookingPersistence->applyPartySnapshotNames($data, (int) ($data['company_id'] ?? $booking->company_id));
 
         $estimateParams = [
             ...$data,
@@ -391,7 +393,7 @@ class BookingController extends Controller
             return response()->json(['message' => 'The given data was invalid.', 'errors' => $cargoErrors], 422);
         }
 
-        $this->bookingPersistence->applyPartySnapshotNames($data);
+        $this->bookingPersistence->applyPartySnapshotNames($data, (int) $data['company_id']);
 
         return DB::transaction(function () use ($request, $user, $data, $isDraft) {
             $estimate = null;

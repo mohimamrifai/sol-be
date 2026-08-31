@@ -238,6 +238,78 @@ class Booking extends Model
     }
 
     /**
+     * Display name for the shipper Customer Location (FSD detail header).
+     * Prefers the live relation, then snapshot captured at booking time.
+     */
+    public function customerLocationName(): ?string
+    {
+        if ($this->relationLoaded('shipperLocation') && $this->shipperLocation) {
+            return $this->shipperLocation->name;
+        }
+
+        if ($this->shipper_location_id) {
+            $name = $this->shipperLocation()->value('name');
+            if (is_string($name) && $name !== '') {
+                return $name;
+            }
+        }
+
+        $snapshot = $this->shipper_snapshot;
+        if (! is_array($snapshot)) {
+            return null;
+        }
+
+        foreach (['location_name', 'name'] as $key) {
+            $value = $snapshot[$key] ?? null;
+            if (is_string($value) && trim($value) !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Display name for shipper company (FSD: separate from Customer Location).
+     */
+    public function shipperCompanyName(): ?string
+    {
+        $locationName = $this->customerLocationName();
+
+        $snapshot = $this->shipper_snapshot;
+        if (is_array($snapshot)) {
+            $company = $snapshot['company'] ?? null;
+            if (is_string($company) && trim($company) !== '') {
+                $company = trim($company);
+                if ($locationName === null || $company !== $locationName) {
+                    return $company;
+                }
+            }
+        }
+
+        if ($this->relationLoaded('company') && $this->company) {
+            return $this->company->name;
+        }
+
+        if ($this->company_id) {
+            $name = $this->company()->value('name');
+            if (is_string($name) && $name !== '') {
+                return $name;
+            }
+        }
+
+        $shipperName = $this->shipper_name;
+        if (is_string($shipperName) && trim($shipperName) !== '') {
+            $shipperName = trim($shipperName);
+            if ($locationName === null || $shipperName !== $locationName) {
+                return $shipperName;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * True when the booking can still be cancelled.
      * Spec L10: Submitted is cancellable until internal processing begins.
      */

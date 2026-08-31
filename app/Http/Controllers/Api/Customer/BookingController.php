@@ -11,6 +11,7 @@ use App\Models\Invoice;
 use App\Models\ServiceType;
 use App\Models\Shipment;
 use App\Services\BookingDraftExpiryService;
+use App\Services\BookingPersistenceService;
 use App\Services\BookingPriceEstimateService;
 use App\Services\MidtransService;
 use App\Support\SystemConfig;
@@ -23,6 +24,7 @@ class BookingController extends Controller
     public function __construct(
         private BookingPriceEstimateService $priceEstimateService,
         private MidtransService $midtransService,
+        private BookingPersistenceService $bookingPersistence,
     ) {}
 
     /**
@@ -435,18 +437,7 @@ class BookingController extends Controller
 
             $data['confirmed_terms_at'] = $isDraft ? null : now();
 
-            if (! empty($data['shipper_snapshot']) && is_array($data['shipper_snapshot'])) {
-                $shipperCompany = $data['shipper_snapshot']['company'] ?? null;
-                if (is_string($shipperCompany) && $shipperCompany !== '') {
-                    $data['shipper_name'] = $shipperCompany;
-                }
-            }
-            if (! empty($data['consignee_snapshot']) && is_array($data['consignee_snapshot'])) {
-                $consigneeCompany = $data['consignee_snapshot']['company'] ?? null;
-                if (is_string($consigneeCompany) && $consigneeCompany !== '') {
-                    $data['consignee_name'] = $consigneeCompany;
-                }
-            }
+            $this->bookingPersistence->applyPartySnapshotNames($data, (int) $user->company_id);
 
             $estimate = null;
             if (! $isDraft) {
@@ -633,12 +624,15 @@ class BookingController extends Controller
             'company', 'user', 'cargoCategory', 'dgClass',
             'originLocation', 'destinationLocation', 'transportMode',
             'serviceType', 'containerType', 'additionalServices',
+            'shipperLocation:id,name,code', 'consigneeLocation:id,name',
             'shipment', 'activities.actor', 'attachments.uploader',
             'packages.dgClass', 'containers.dgClass', 'containers.containerType',
             'packages.cargoCategory', 'containers.cargoCategory',
         ]);
         $booking->setAttribute('has_shipment', $booking->shipment()->exists());
         $booking->setAttribute('available_actions', $this->availableActions($booking, $user));
+        $booking->setAttribute('customer_location_name', $booking->customerLocationName());
+        $booking->setAttribute('shipper_company_name', $booking->shipperCompanyName());
 
         $costBreakdown = null;
         if ($booking->estimated_price !== null) {

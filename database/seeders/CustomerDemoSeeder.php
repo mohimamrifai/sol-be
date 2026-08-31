@@ -664,6 +664,8 @@ class CustomerDemoSeeder extends Seeder
             'shipper_address' => $shipperLocation?->address ?? $ctx['company']->address,
             'shipper_phone' => $shipperLocation?->phone ?? $ctx['company']->phone,
             'shipper_snapshot' => $shipperLocation ? [
+                'location_name' => $shipperLocation->name,
+                'location_code' => $shipperLocation->code,
                 'company' => $ctx['company']->name,
                 'pic_name' => $shipperLocation->pic_name,
                 'pic_email' => $shipperLocation->pic_email,

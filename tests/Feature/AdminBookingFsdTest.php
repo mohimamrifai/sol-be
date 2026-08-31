@@ -116,6 +116,94 @@ class AdminBookingFsdTest extends TestCase
         $this->assertNotContains($legacy->id, $ids);
     }
 
+    public function test_admin_booking_show_exposes_customer_location_name(): void
+    {
+        $booking = $this->createBooking('submitted');
+        $booking->update([
+            'shipper_location_id' => null,
+            'shipper_snapshot' => [
+                'location_name' => 'Jakarta Head Office',
+                'company' => $this->company->name,
+            ],
+        ]);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->getJson("/api/admin/bookings/{$booking->id}")
+            ->assertOk()
+            ->assertJsonPath('data.customer_location_name', 'Jakarta Head Office');
+    }
+
+    public function test_admin_booking_show_uses_shipper_location_relation(): void
+    {
+        $booking = $this->createBooking('submitted');
+
+        Sanctum::actingAs($this->admin);
+
+        $this->getJson("/api/admin/bookings/{$booking->id}")
+            ->assertOk()
+            ->assertJsonPath('data.customer_location_name', $this->shipperLocation->name);
+    }
+
+    public function test_admin_booking_show_exposes_shipper_company_name(): void
+    {
+        $booking = $this->createBooking('submitted');
+        $booking->update([
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_snapshot' => [
+                'company' => $this->shipperLocation->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
+        ]);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->getJson("/api/admin/bookings/{$booking->id}")
+            ->assertOk()
+            ->assertJsonPath('data.shipper_company_name', $this->company->name)
+            ->assertJsonPath('data.customer_location_name', $this->shipperLocation->name);
+    }
+
+    public function test_admin_store_normalizes_shipper_company_from_company_not_location(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $response = $this->postJson('/api/admin/bookings', [
+            'company_id' => $this->company->id,
+            'origin_location_id' => $this->origin->id,
+            'destination_location_id' => $this->destination->id,
+            'transport_mode_id' => $this->mode->id,
+            'service_type_id' => $this->lclService->id,
+            'shipment_coverage' => 'port_to_port',
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_address' => $this->shipperLocation->address,
+            'shipper_phone' => $this->shipperLocation->pic_mobile,
+            'shipper_location_id' => $this->shipperLocation->id,
+            'consignee_name' => 'Consignee',
+            'consignee_address' => 'Addr',
+            'consignee_phone' => '08222',
+            'is_draft' => 0,
+            'packages' => [
+                [
+                    'description' => 'Carton Elektronik',
+                    'package_type' => 'Carton',
+                    'piece_count' => 1,
+                    'weight_kg' => 120,
+                    'length' => 100,
+                    'width' => 80,
+                    'height' => 60,
+                    'cargo_category_id' => $this->generalCargo->id,
+                ],
+            ],
+        ])->assertCreated();
+
+        $booking = Booking::findOrFail((int) $response->json('data.id'));
+
+        $this->assertSame($this->company->name, $booking->shipper_name);
+        $this->assertSame($this->company->name, $booking->shipper_snapshot['company'] ?? null);
+        $this->assertSame($this->shipperLocation->name, $booking->shipper_snapshot['location_name'] ?? null);
+    }
+
     public function test_reject_submitted_booking_logs_activity(): void
     {
         $booking = $this->createBooking('submitted');
@@ -276,10 +364,14 @@ class AdminBookingFsdTest extends TestCase
             'transport_mode_id' => $this->mode->id,
             'service_type_id' => $this->lclService->id,
             'shipment_coverage' => 'port_to_port',
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_snapshot' => [
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
             'consignee_name' => 'Consignee',
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',
@@ -334,10 +426,14 @@ class AdminBookingFsdTest extends TestCase
             'transport_mode_id' => $this->mode->id,
             'service_type_id' => $this->lclService->id,
             'shipment_coverage' => 'port_to_port',
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_snapshot' => [
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
             'consignee_name' => 'Consignee',
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',
@@ -377,10 +473,14 @@ class AdminBookingFsdTest extends TestCase
             'transport_mode_id' => $this->mode->id,
             'service_type_id' => $this->lclService->id,
             'shipment_coverage' => 'port_to_port',
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_snapshot' => [
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
             'consignee_name' => 'Consignee',
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',
@@ -419,10 +519,14 @@ class AdminBookingFsdTest extends TestCase
             'transport_mode_id' => $this->mode->id,
             'shipment_coverage' => 'port_to_port',
             'status' => $status,
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_snapshot' => [
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
             'consignee_name' => 'Consignee',
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',
@@ -440,10 +544,14 @@ class AdminBookingFsdTest extends TestCase
             'service_type_id' => $this->lclService->id,
             'shipment_coverage' => 'port_to_port',
             'cargo_category_id' => $this->generalCargo->id,
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_snapshot' => [
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
             'consignee_name' => 'Consignee',
             'consignee_address' => 'Addr',
             'consignee_phone' => '08222',

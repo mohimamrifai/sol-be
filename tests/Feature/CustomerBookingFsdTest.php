@@ -122,6 +122,8 @@ class CustomerBookingFsdTest extends TestCase
         Sanctum::actingAs($this->admin);
 
         $payload = $this->basePayload(isDraft: true);
+        $payload['shipper_name'] = $this->shipperLocation->name;
+        $payload['shipper_snapshot']['company'] = $this->shipperLocation->name;
 
         $response = $this->postJson('/api/customer/bookings', $payload)->assertCreated();
 
@@ -135,6 +137,9 @@ class CustomerBookingFsdTest extends TestCase
         );
         $this->assertSame('draft', $booking->status);
         $this->assertSame($this->shipperLocation->id, $booking->shipper_location_id);
+        $this->assertSame($this->company->name, $booking->shipper_name);
+        $this->assertSame($this->company->name, $booking->shipper_snapshot['company'] ?? null);
+        $this->assertSame($this->shipperLocation->name, $booking->shipper_snapshot['location_name'] ?? null);
         $this->assertNotNull($booking->shipper_snapshot);
     }
 
@@ -241,12 +246,13 @@ class CustomerBookingFsdTest extends TestCase
             'transport_mode_id' => $this->mode->id,
             'service_type_id' => $this->lclService->id,
             'shipment_coverage' => 'port_to_port',
-            'shipper_name' => $this->shipperLocation->name,
+            'shipper_name' => $this->company->name,
             'shipper_address' => $this->shipperLocation->address,
             'shipper_phone' => $this->shipperLocation->pic_mobile,
             'shipper_location_id' => $this->shipperLocation->id,
             'shipper_snapshot' => [
-                'company' => $this->shipperLocation->name,
+                'company' => $this->company->name,
+                'location_name' => $this->shipperLocation->name,
                 'pic_name' => $this->shipperLocation->pic_name,
                 'address' => $this->shipperLocation->address,
             ],

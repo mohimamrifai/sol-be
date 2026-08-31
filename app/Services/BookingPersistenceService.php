@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Booking;
 use App\Models\CargoCategory;
+use App\Models\Company;
 use App\Models\CustomerLocation;
 use App\Models\ServiceType;
 use Illuminate\Http\Request;
@@ -71,13 +72,68 @@ final class BookingPersistenceService
     /**
      * @param  array<string, mixed>  $data
      */
-    public function applyPartySnapshotNames(array &$data): void
+    public function applyPartySnapshotNames(array &$data, ?int $companyId = null): void
     {
-        if (! empty($data['shipper_snapshot']) && is_array($data['shipper_snapshot'])) {
-            $shipperCompany = $data['shipper_snapshot']['company'] ?? null;
-            if (is_string($shipperCompany) && $shipperCompany !== '') {
-                $data['shipper_name'] = $shipperCompany;
+        $requestedShipperName = null;
+        if (isset($data['shipper_name']) && is_string($data['shipper_name'])) {
+            $trimmed = trim($data['shipper_name']);
+            if ($trimmed !== '') {
+                $requestedShipperName = $trimmed;
             }
+        }
+
+        $locationName = null;
+
+        if (! empty($data['shipper_location_id'])) {
+            $location = CustomerLocation::query()->find($data['shipper_location_id']);
+            if ($location) {
+                $snapshot = is_array($data['shipper_snapshot'] ?? null) ? $data['shipper_snapshot'] : [];
+                $snapshot['location_name'] = $location->name;
+                if (! empty($location->code)) {
+                    $snapshot['location_code'] = $location->code;
+                }
+                $data['shipper_snapshot'] = $snapshot;
+                $locationName = $location->name;
+            }
+        }
+
+        $companyName = null;
+        if ($companyId) {
+            $resolved = Company::query()->whereKey($companyId)->value('name');
+            $companyName = is_string($resolved) && trim($resolved) !== '' ? trim($resolved) : null;
+        }
+
+        $snapshot = is_array($data['shipper_snapshot'] ?? null) ? $data['shipper_snapshot'] : [];
+        $snapshotCompany = $snapshot['company'] ?? null;
+        $snapshotCompany = is_string($snapshotCompany) && trim($snapshotCompany) !== ''
+            ? trim($snapshotCompany)
+            : null;
+
+        if ($companyName && ($snapshotCompany === null || ($locationName !== null && $snapshotCompany === $locationName))) {
+            $snapshot['company'] = $companyName;
+            $data['shipper_snapshot'] = $snapshot;
+            $snapshotCompany = $companyName;
+        }
+
+        if ($snapshotCompany !== null) {
+            $data['shipper_name'] = $snapshotCompany;
+        } elseif ($companyName !== null) {
+            $data['shipper_name'] = $companyName;
+            $snapshot['company'] = $companyName;
+            $data['shipper_snapshot'] = $snapshot;
+        }
+
+        if ($companyName && $locationName !== null && ($data['shipper_name'] ?? null) === $locationName) {
+            $data['shipper_name'] = $companyName;
+            $snapshot['company'] = $companyName;
+            $data['shipper_snapshot'] = $snapshot;
+        }
+
+        if ($requestedShipperName !== null && ($locationName === null || $requestedShipperName !== $locationName)) {
+            $data['shipper_name'] = $requestedShipperName;
+            $snapshot = is_array($data['shipper_snapshot'] ?? null) ? $data['shipper_snapshot'] : [];
+            $snapshot['company'] = $requestedShipperName;
+            $data['shipper_snapshot'] = $snapshot;
         }
 
         if (! empty($data['consignee_snapshot']) && is_array($data['consignee_snapshot'])) {
