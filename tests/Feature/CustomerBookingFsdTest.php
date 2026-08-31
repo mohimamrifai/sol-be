@@ -143,6 +143,26 @@ class CustomerBookingFsdTest extends TestCase
         $this->assertNotNull($booking->shipper_snapshot);
     }
 
+    public function test_customer_booking_show_separates_company_and_location(): void
+    {
+        $booking = $this->createBooking($this->company, Booking::STATUS_SUBMITTED);
+        $booking->update([
+            'shipper_location_id' => $this->shipperLocation->id,
+            'shipper_name' => $this->shipperLocation->name,
+            'shipper_snapshot' => [
+                'company' => $this->shipperLocation->name,
+                'location_name' => $this->shipperLocation->name,
+            ],
+        ]);
+
+        Sanctum::actingAs($this->admin);
+
+        $this->getJson("/api/customer/bookings/{$booking->id}")
+            ->assertOk()
+            ->assertJsonPath('data.shipper_company_name', $this->company->name)
+            ->assertJsonPath('data.customer_location_name', $this->shipperLocation->name);
+    }
+
     public function test_package_cargo_category_is_persisted_per_item(): void
     {
         Sanctum::actingAs($this->admin);
