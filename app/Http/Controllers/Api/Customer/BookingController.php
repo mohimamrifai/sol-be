@@ -447,6 +447,7 @@ class BookingController extends Controller
                     'transport_mode_id' => $data['transport_mode_id'],
                     'service_type_id' => $data['service_type_id'],
                     'shipment_coverage' => $data['shipment_coverage'] ?? null,
+                    'cargo_category_id' => $data['cargo_category_id'] ?? null,
                     'container_type_id' => $data['container_type_id'] ?? null,
                     'container_count' => $data['container_count'] ?? 1,
                     'estimated_weight' => $data['estimated_weight'] ?? 0,
@@ -473,7 +474,7 @@ class BookingController extends Controller
                 'company_id' => $user->company_id,
                 'user_id' => $user->id,
                 'status' => $isDraft ? Booking::STATUS_DRAFT : Booking::STATUS_SUBMITTED,
-                'estimated_price' => $estimate['estimated_price'] ?? null,
+                ...$this->priceEstimateService->estimateBookingFields($estimate),
                 'msds_file' => $msdsPath,
                 'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);
@@ -712,6 +713,7 @@ class BookingController extends Controller
                 'transport_mode_id' => $data['transport_mode_id'],
                 'service_type_id' => $data['service_type_id'],
                 'shipment_coverage' => $data['shipment_coverage'] ?? null,
+                'cargo_category_id' => $data['cargo_category_id'] ?? $booking->cargo_category_id,
                 'container_type_id' => $data['container_type_id'] ?? null,
                 'container_count' => $data['container_count'] ?? 1,
                 'estimated_weight' => $data['estimated_weight'] ?? 0,
@@ -726,7 +728,7 @@ class BookingController extends Controller
 
             $updatePayload = [
                 ...$data,
-                'estimated_price' => $estimate['estimated_price'],
+                ...$this->priceEstimateService->estimateBookingFields($estimate),
                 'msds_file' => $msdsPath,
             ];
             unset($updatePayload['additional_services']);

@@ -215,7 +215,7 @@ class BookingController extends Controller
 
         $payload = [
             ...$data,
-            'estimated_price' => $estimate['estimated_price'],
+            ...$this->priceEstimateService->estimateBookingFields($estimate),
             'msds_file' => ! empty($data['is_dangerous_goods']) ? $msdsPath : null,
             'dg_class_id' => ! empty($data['is_dangerous_goods']) ? ($data['dg_class_id'] ?? null) : null,
             'un_number' => ! empty($data['is_dangerous_goods']) ? ($data['un_number'] ?? null) : null,
@@ -423,7 +423,7 @@ class BookingController extends Controller
                 ...$data,
                 'user_id' => $user->id,
                 'status' => $isDraft ? 'draft' : 'submitted',
-                'estimated_price' => $estimate['estimated_price'] ?? null,
+                ...$this->priceEstimateService->estimateBookingFields($estimate),
                 'msds_file' => $msdsPath,
                 'draft_expires_at' => $isDraft ? SystemConfig::draftExpiresAt() : null,
             ]);

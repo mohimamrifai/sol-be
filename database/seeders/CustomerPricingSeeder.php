@@ -48,6 +48,7 @@ class CustomerPricingSeeder extends Seeder
         $container20 = ContainerType::where('size', '20ft')->first();
         $container40 = ContainerType::where('size', '40ft')->first();
         $pickupCharge = AdditionalCharge::where('code', 'PICKUP')->first();
+        $deliveryCharge = AdditionalCharge::where('code', 'DELIVERY')->first();
         $storageCharge = AdditionalCharge::where('code', 'STRG_DAY')->first();
 
         $definitions = [
@@ -77,7 +78,10 @@ class CustomerPricingSeeder extends Seeder
                 'minimum_charge' => 1200000,
                 'status' => 'active',
                 'remark' => 'Tarif LCL elektronik door-to-door',
-                'charges' => [],
+                'charges' => array_values(array_filter([
+                    $pickupCharge ? ['additional_charge_id' => $pickupCharge->id, 'charge_type' => 'fixed', 'amount' => 650000] : null,
+                    $deliveryCharge ? ['additional_charge_id' => $deliveryCharge->id, 'charge_type' => 'fixed', 'amount' => 550000] : null,
+                ])),
             ],
             [
                 'company_id' => $mainCompany->id,

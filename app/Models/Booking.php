@@ -63,7 +63,7 @@ class Booking extends Model
         'pickup_date', 'pickup_time', 'pickup_notes', 'delivery_notes',
         'container_responsibility',
         'confirmed_terms_at',
-        'estimated_price', 'status', 'draft_expires_at',
+        'estimated_price', 'cost_estimate_snapshot', 'status', 'draft_expires_at',
         'rejection_reason', 'cancellation_reason', 'notes',
         'approved_by', 'approved_at',
     ];
@@ -85,6 +85,7 @@ class Booking extends Model
             'volume_weight_kg' => 'decimal:4',
             'chargeable_weight_kg' => 'decimal:4',
             'estimated_price' => 'decimal:2',
+            'cost_estimate_snapshot' => 'array',
             'container_count' => 'integer',
             'is_dangerous_goods' => 'boolean',
             'temperature' => 'decimal:2',
